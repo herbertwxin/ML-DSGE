@@ -4,12 +4,23 @@ import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
-from typing import Tuple, Optional
 import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Check for SciPy
+try:
+    from scipy.interpolate import RectBivariateSpline
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    # Define dummy class to satisfy linter/static analysis
+    class RectBivariateSpline:
+        def __init__(self, *args, **kwargs): pass
+        def ev(self, x, y): return np.array([0.0])
+    logger.warning("SciPy not found. Time Iteration comparison will be skipped.")
 
 # Set random seeds for reproducibility
 torch.manual_seed(42)
@@ -26,11 +37,11 @@ class Params:
     sigma_eps: float = 0.02  # std dev of shock innovation
 
     # Bounds for state space sampling
-    k_bounds: Tuple[float, float] = (0.5, 1.5) # fraction of SS capital
-    A_bounds: Tuple[float, float] = (0.5, 1.5)
-    beta_bounds: Tuple[float, float] = (0.9, 0.99)
-    rho_bounds: Tuple[float, float] = (0.9, 0.99)
-    gamma_bounds: Tuple[float, float] = (0.5, 4.0)
+    k_bounds: tuple = (0.5, 1.5) # fraction of SS capital
+    A_bounds: tuple = (0.5, 1.5)
+    beta_bounds: tuple = (0.9, 0.99)
+    rho_bounds: tuple = (0.9, 0.99)
+    gamma_bounds: tuple = (0.5, 4.0)
 
 class RBCNet(nn.Module):
     """Neural Network to approximate the policy function."""
@@ -327,79 +338,162 @@ class RBCSolver:
             "investment": i_series
         }
 
-    def impulse_response(self, shock_size: float = 0.05, T: int = 40, NIRF: int = 50):
-        """Compute impulse response to productivity shock."""
-        logger.info(f"Computing impulse response ({NIRF} simulations)...")
+class RBCTISolver:
+    """
+    Solves the RBC model using Time Iteration with Cubic Splines.
+    """
+    def __init__(self, params: Params):
+        self.p = params
+        self.k_ss, self.c_ss, self.y_ss, self.A_ss = self.calculate_steady_state()
         
-        # Baseline
-        baseline_avg = None
+        # Grids
+        self.n_k = 30
+        self.n_A = 15
         
-        for i in range(NIRF):
-            # Same seed for consistent shocks within the group, but we want randomness across NIRF? 
-            # Actually standard practice is:
-            # Fix shocks e_t for t=1..T
-            # Path 1: A_0 = A_ss
-            # Path 2: A_0 = A_ss * (1+shock)
-            # Difference.
-            # Then average over many different random shock paths {e_t}.
-            
-            # Let's reset numpy seed per iteration to ensure we get variation, 
-            # or rely on global state.
-            
-            res = self.simulate(T, self.k_ss, self.A_ss)
-            df = np.stack([res["output"], res["consumption"], res["investment"], res["capital"]], axis=1)
-            
-            if baseline_avg is None:
-                baseline_avg = df
-            else:
-                baseline_avg += df
-                
-        baseline_avg /= NIRF
+        self.k_min = self.p.k_bounds[0] * self.k_ss
+        self.k_max = self.p.k_bounds[1] * self.k_ss
+        self.A_min = self.p.A_bounds[0] * self.A_ss
+        self.A_max = self.p.A_bounds[1] * self.A_ss
         
-        # Shocked
-        shocked_avg = None
-        for i in range(NIRF):
-            # We want SAME shock series as baseline for this iteration i
-            # So we should probably align seeds or pass shocks.
-            # Simplified: Use fixed seed for each i pair.
-             
-            # Better approach for IRF:
-            # 1. Start at SS.
-            # 2. Shock at t=0.
-            # 3. Simulate forward with NO further shocks (deterministic IRF) or with random shocks.
-            # The Julia code did: simulate with random shocks.
-            
-            # Let's trust the "Law of Large Numbers" with NIRF=50
-            # Ideally we lock seed i for both baseline and shocked run i.
-            
-            np.random.seed(1000 + i)
-            base_run = self.simulate(T, self.k_ss, self.A_ss)
-            
-            np.random.seed(1000 + i)
-            shock_run = self.simulate(T, self.k_ss, self.A_ss * (1 + shock_size))
-            
-            base_mat = np.stack([base_run["output"], base_run["consumption"], base_run["investment"], base_run["capital"]], axis=1)
-            shock_mat = np.stack([shock_run["output"], shock_run["consumption"], shock_run["investment"], shock_run["capital"]], axis=1)
-            
-            if baseline_avg is None: 
-                baseline_avg = base_mat 
-                shocked_avg = shock_mat
-            else:
-                baseline_avg += base_mat
-                shocked_avg += shock_mat
-                
-        # Re-averaging correct logic above
-        # Actually I just accumulated them. 
-        # But wait, the `baseline_avg` variable was used differently in the two blocks. 
-        # Let's fix.
+        self.k_nodes = np.linspace(self.k_min, self.k_max, self.n_k)
+        self.A_nodes = np.linspace(self.A_min, self.A_max, self.n_A)
         
-        pass 
-        # Refactored below in main code to be cleaner.
-        return {}
+        # Initial guess: c = c_ss
+        self.c_policy = np.full((self.n_k, self.n_A), self.c_ss)
+        
+        # Quadrature
+        self.n_quad = 7
+        nodes, weights = np.polynomial.hermite.hermgauss(self.n_quad)
+        self.z_nodes = nodes * np.sqrt(2)
+        self.z_weights = weights / np.sqrt(np.pi)
+
+    def calculate_steady_state(self):
+        alpha, beta, delta = self.p.alpha, self.p.beta, self.p.delta
+        A_ss = 1.0
+        term = (1.0 / beta - (1.0 - delta)) / (alpha * A_ss)
+        k_ss = term ** (1.0 / (alpha - 1.0))
+        y_ss = A_ss * k_ss ** alpha
+        c_ss = y_ss - delta * k_ss
+        return k_ss, c_ss, y_ss, A_ss
+
+    def solve(self, tol=1e-6, max_iter=1000, damping=0.5):
+        logger.info("Starting Time Iteration (SciPy Splines)...")
+        
+        for iter_idx in range(max_iter):
+            c_new = np.empty_like(self.c_policy)
+            
+            # Current policy interpolator
+            interp = RectBivariateSpline(self.k_nodes, self.A_nodes, self.c_policy, kx=3, ky=3)
+            
+            # Loop over nodes
+            for i in range(self.n_k):
+                for j in range(self.n_A):
+                    k = self.k_nodes[i]
+                    A = self.A_nodes[j]
+                    
+                    c_old = self.c_policy[i, j]
+                    c_old = max(c_old, 1e-6)
+                    
+                    y = A * k ** self.p.alpha
+                    res = y + (1 - self.p.delta) * k
+                    
+                    c_calc = min(c_old, res - 1e-4)
+                    k_prime = res - c_calc
+                    
+                    # Clamp k_prime
+                    k_prime_clamped = np.clip(k_prime, self.k_min, self.k_max)
+                    
+                    E_rhs = 0.0
+                    for z in range(self.n_quad):
+                        eps = self.z_nodes[z]
+                        logA_prime = self.p.rho * np.log(A) + self.p.sigma_eps * eps
+                        A_prime = np.exp(logA_prime)
+                        
+                        # Clamp A_prime
+                        A_prime_clamped = np.clip(A_prime, self.A_min, self.A_max)
+                        
+                        c_prime = interp.ev(k_prime_clamped, A_prime_clamped).item()
+                        c_prime = max(c_prime, 1e-6)
+                        
+                        mu_prime = c_prime ** (-self.p.gamma)
+                        R_prime = self.p.alpha * A_prime * k_prime_clamped ** (self.p.alpha - 1) + (1 - self.p.delta)
+                        
+                        E_rhs += self.z_weights[z] * (mu_prime * R_prime)
+                    
+                    c_target = (self.p.beta * E_rhs) ** (-1 / self.p.gamma)
+                    c_new[i, j] = damping * c_target + (1 - damping) * c_old
+            
+            diff = np.max(np.abs(c_new - self.c_policy))
+            if iter_idx % 10 == 0:
+                logger.info(f"TI Iteration {iter_idx}, diff: {diff:.6f}")
+            
+            if diff < tol:
+                logger.info(f"TI Converged in {iter_idx} iterations")
+                self.c_policy = c_new
+                return RectBivariateSpline(self.k_nodes, self.A_nodes, self.c_policy, kx=3, ky=3)
+            
+            self.c_policy = c_new
+            
+        logger.warning("TI Did not converge")
+        return RectBivariateSpline(self.k_nodes, self.A_nodes, self.c_policy, kx=3, ky=3)
+
+    def simulate(self, policy_interp, T=200, k0=None, A0=None):
+        if k0 is None: k0 = self.k_ss
+        if A0 is None: A0 = self.A_ss
+        
+        k_series = np.zeros(T + 1)
+        A_series = np.zeros(T + 1)
+        c_series = np.zeros(T)
+        y_series = np.zeros(T)
+        i_series = np.zeros(T)
+        
+        k_series[0] = k0
+        A_series[0] = A0
+        
+        eps_series = np.random.randn(T)
+        
+        for t in range(T):
+            k = k_series[t]
+            A = A_series[t]
+            
+            # Check bounds for potential extrapolation issues
+            if k < self.k_min or k > self.k_max or A < self.A_min or A > self.A_max:
+                # We do not clamp here to match Julia's behavior (which likely extrapolates),
+                # but we note that this is a source of potential divergence.
+                pass
+
+            c = policy_interp.ev(k, A).item()
+            c_series[t] = c
+            
+            y = A * k ** self.p.alpha
+            y_series[t] = y
+            
+            i = y - c
+            i_series[t] = i
+            
+            k_next = y + (1 - self.p.delta) * k - c
+            k_series[t+1] = k_next
+            
+            logA_next = self.p.rho * np.log(max(A, 1e-8)) + self.p.sigma_eps * eps_series[t]
+            A_series[t+1] = np.exp(logA_next)
+            
+        return {
+            "capital": k_series[:T],
+            "productivity": A_series[:T],
+            "consumption": c_series,
+            "output": y_series,
+            "investment": i_series
+        }
 
 def run_impulse_response_logic(solver: RBCSolver, shock_size=0.05, T=40, NIRF=100):
-    # Accumulators
-    acc_dev = np.zeros((T, 4)) # output, cons, inv, cap
+    # Accumulators for levels
+    # We need to accumulate output, consumption, investment, capital
+    
+    def get_data(res):
+        return np.stack([res["output"], res["consumption"], res["investment"], res["capital"]], axis=1)
+        
+    base_sum = np.zeros((T, 4))
+    shock_sum = np.zeros((T, 4))
     
     for i in range(NIRF):
         seed = 9000 + i
@@ -407,20 +501,19 @@ def run_impulse_response_logic(solver: RBCSolver, shock_size=0.05, T=40, NIRF=10
         # Baseline
         np.random.seed(seed)
         base = solver.simulate(T, solver.k_ss, solver.A_ss)
+        base_sum += get_data(base)
         
         # Shocked
         np.random.seed(seed)
         shock = solver.simulate(T, solver.k_ss, solver.A_ss * (1 + shock_size))
+        shock_sum += get_data(shock)
         
-        # Arrays
-        b_mat = np.stack([base["output"], base["consumption"], base["investment"], base["capital"]], axis=1)
-        s_mat = np.stack([shock["output"], shock["consumption"], shock["investment"], shock["capital"]], axis=1)
-        
-        # Percent deviation
-        dev = 100 * (s_mat / b_mat - 1.0)
-        acc_dev += dev
-        
-    avg_dev = acc_dev / NIRF
+    base_avg = base_sum / NIRF
+    shock_avg = shock_sum / NIRF
+    
+    # Percent deviation
+    # Avoid division by zero if any (unlikely near SS)
+    avg_dev = 100 * (shock_avg / base_avg - 1.0)
     
     # Plot
     labels = ["Output", "Consumption", "Investment", "Capital"]
@@ -436,6 +529,78 @@ def run_impulse_response_logic(solver: RBCSolver, shock_size=0.05, T=40, NIRF=10
     plt.savefig("NN_Impulse_Response_Py.png")
     logger.info("Impulse response figure saved.")
 
+def run_impulse_response_ti(solver: RBCTISolver, policy_interp, shock_size=0.05, T=40, NIRF=100):
+    # Accumulators for levels
+    
+    def get_data(res):
+        return np.stack([res["output"], res["consumption"], res["investment"], res["capital"]], axis=1)
+        
+    base_sum = np.zeros((T, 4))
+    shock_sum = np.zeros((T, 4))
+    
+    for i in range(NIRF):
+        seed = 9000 + i
+        
+        # Baseline
+        np.random.seed(seed)
+        base = solver.simulate(policy_interp, T, solver.k_ss, solver.A_ss)
+        base_sum += get_data(base)
+        
+        # Shocked
+        np.random.seed(seed)
+        shock = solver.simulate(policy_interp, T, solver.k_ss, solver.A_ss * (1 + shock_size))
+        shock_sum += get_data(shock)
+        
+    base_avg = base_sum / NIRF
+    shock_avg = shock_sum / NIRF
+    
+    # Percent deviation
+    avg_dev = 100 * (shock_avg / base_avg - 1.0)
+    
+    # Plot
+    labels = ["Output", "Consumption", "Investment", "Capital"]
+    plt.figure(figsize=(10, 6))
+    for idx, label in enumerate(labels):
+        plt.plot(avg_dev[:, idx], label=label, linewidth=2)
+        
+    plt.title(f"TI Impulse Responses to {shock_size*100:.1f}% Productivity Shock")
+    plt.xlabel("Time")
+    plt.ylabel("% Deviation from Baseline")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig("TI_Impulse_Response_Py.png")
+    logger.info("TI Impulse response figure saved.")
+
+def check_potential_problems(params: Params):
+    """
+    Checks for potential sources of discrepancy between NN and TI.
+    """
+    logger.info("Checking for potential discrepancies...")
+
+    # 1. Grid Bounds vs Distribution
+    # TI is bounded by k_bounds and A_bounds. NN is trained on samples.
+    # If simulation goes outside bounds, TI clamps/extrapolates, NN extrapolates.
+    # A is lognormal, so it has infinite support.
+    sigma_stat = params.sigma_eps / np.sqrt(1 - params.rho**2)
+    log_A_std = sigma_stat
+    # 99% interval for A
+    A_low_99 = np.exp(-2.58 * log_A_std)
+    A_high_99 = np.exp(2.58 * log_A_std)
+
+    if A_low_99 < params.A_bounds[0] or A_high_99 > params.A_bounds[1]:
+        logger.warning(f"Potential Issue: A distribution (99% interval [{A_low_99:.3f}, {A_high_99:.3f}]) "
+                       f"exceeds grid bounds [{params.A_bounds[0]}, {params.A_bounds[1]}]. "
+                       "TI relies on extrapolation here, which may diverge from NN.")
+
+    # 2. Interpolation
+    logger.info("Note: TI uses Cubic Splines (local), NN uses Global approximation. "
+                "Differences in smoothness and extrapolation behavior are expected.")
+
+    # 3. Simulation Clamping
+    logger.info("Note: NN simulation clamps capital to be positive (max(k, 1e-6)). "
+                "TI simulation (in Julia and here) does not explicitly clamp k_next. "
+                "If TI policy leads to negative capital (e.g. due to extrapolation error), "
+                "the simulation will crash or produce NaNs, whereas NN will survive.")
 
 def main():
     params = Params()
@@ -451,7 +616,7 @@ def main():
     solver = RBCSolver(params, device=device)
     
     # Train
-    losses = solver.train(batch_size=2048, epochs=5000) # 5000 is usually enough for this simple problem
+    losses = solver.train(batch_size=2048, epochs=5000) 
     
     # Plot Loss
     plt.figure()
@@ -464,6 +629,51 @@ def main():
     
     # Impulse Response
     run_impulse_response_logic(solver)
+    
+    # ==========================================
+    # COMPARISON: Time Iteration vs Neural Network
+    # ==========================================
+    
+    check_potential_problems(params)
+    
+    if SCIPY_AVAILABLE:
+        # Time Iteration
+        ti_solver = RBCTISolver(params)
+        policy_ti = ti_solver.solve()
+        
+        # Comparison Simulation
+        T_sim = 200
+        
+        # Set seed for NN simulation
+        np.random.seed(123)
+        nn_results = solver.simulate(T=T_sim)
+        
+        # Set SAME seed for TI simulation
+        np.random.seed(123)
+        ti_results = ti_solver.simulate(policy_ti, T=T_sim)
+        
+        # Plot Comparison
+        fig, axes = plt.subplots(2, 1, figsize=(10, 8))
+        
+        axes[0].plot(nn_results["consumption"], label="NN Consumption", linewidth=2)
+        axes[0].plot(ti_results["consumption"], label="TI Consumption", linewidth=2, linestyle="--")
+        axes[0].legend()
+        axes[0].set_title("Consumption Comparison")
+        
+        axes[1].plot(nn_results["capital"], label="NN Capital", linewidth=2)
+        axes[1].plot(ti_results["capital"], label="TI Capital", linewidth=2, linestyle="--")
+        axes[1].legend()
+        axes[1].set_title("Capital Comparison")
+        
+        plt.tight_layout()
+        plt.savefig("TI_vs_NN_Py.png")
+        logger.info("Comparison figure saved.")
+        
+        # TI Impulse Response
+        run_impulse_response_ti(ti_solver, policy_ti)
+
+    else:
+        logger.info("Skipping TI comparison due to missing SciPy.")
     
     logger.info("Done.")
 
