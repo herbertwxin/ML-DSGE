@@ -52,22 +52,23 @@ class RBCNet(nn.Module):
         
         for h_dim in hidden_dims:
             layers.append(nn.Linear(prev_dim, h_dim))
-            layers.append(nn.LeakyReLU())
+            layers.append(nn.ELU())
+            #nn.init.xavier_uniform_(layers[-2].weight, gain= 0.01)
             prev_dim = h_dim
         
         # Output layer
-        self.output_layer = nn.Linear(prev_dim, output_dim)
+        output_layer = nn.Linear(prev_dim, output_dim)
+        #nn.init.xavier_uniform_(output_layer.weight, gain= 0.01)
         # Initialize bias to start close to steady state
         with torch.no_grad():
-            self.output_layer.bias.fill_(output_bias)
+            output_layer.bias.fill_(output_bias)
         
+        layers.append(output_layer)
+        layers.append(nn.Sigmoid())
         self.network = nn.Sequential(*layers)
-        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.network(x)
-        x = self.output_layer(x)
-        return self.sigmoid(x)
+        return self.network(x)
 
 class RBCSolver:
     def __init__(self, params: Params, device: str = "cpu"):
@@ -92,7 +93,7 @@ class RBCSolver:
         
         # Quadrature nodes (Hermite-Gauss)
         # 5 nodes
-        self.n_quad = 5
+        self.n_quad = 3
         nodes, weights = np.polynomial.hermite.hermgauss(self.n_quad)
         # Transform from e^(-x^2) to N(0,1)
         # nodes = sqrt(2) * x_i
@@ -121,120 +122,120 @@ class RBCSolver:
     def sample_batch(self, batch_size: int):
         """Generates a batch of state variables."""
         p = self.p
-        
+
         # Uniform sampling for k, beta, rho, gamma
         k_batch = torch.rand(batch_size, device=self.device)
         beta_batch = torch.rand(batch_size, device=self.device)
         rho_batch = torch.rand(batch_size, device=self.device)
         gamma_batch = torch.rand(batch_size, device=self.device)
-        
+
         # Lognormal sampling for A
         # Stationary std dev: sigma_stat = sigma_eps / sqrt(1 - rho^2)
         # Note: rho here is a random variable, so we compute sigma_stat per sample
         rho_val = self.denormalize(rho_batch, p.rho_bounds[0], p.rho_bounds[1])
         sigma_stat = p.sigma_eps / torch.sqrt(1.0 - rho_val**2)
-        
+
         A = torch.exp(sigma_stat * torch.randn(batch_size, device=self.device))
         A_batch = self.normalize(A, p.A_bounds[0], p.A_bounds[1])
-        
+
         # Stack inputs: shape (batch_size, 5)
         # Order: k, A, beta, rho, gamma
         inputs = torch.stack([k_batch, A_batch, beta_batch, rho_batch, gamma_batch], dim=1)
-        
+
         return inputs
 
     def compute_residuals(self, inputs: torch.Tensor):
         """Computes Euler residuals for a batch of inputs."""
         p = self.p
-        
+
         # Unpack normalized inputs
         k_norm = inputs[:, 0]
         A_norm = inputs[:, 1]
         beta_norm = inputs[:, 2]
         rho_norm = inputs[:, 3]
         gamma_norm = inputs[:, 4]
-        
+
         # Denormalize parameters needed for computation
         beta = self.denormalize(beta_norm, p.beta_bounds[0], p.beta_bounds[1])
         rho = self.denormalize(rho_norm, p.rho_bounds[0], p.rho_bounds[1])
         gamma = self.denormalize(gamma_norm, p.gamma_bounds[0], p.gamma_bounds[1])
-        
+
         # Denormalize states
         k_low = p.k_bounds[0] * self.k_ss
         k_high = p.k_bounds[1] * self.k_ss
         k = self.denormalize(k_norm, k_low, k_high)
         A = self.denormalize(A_norm, p.A_bounds[0], p.A_bounds[1])
-        
+
         # Get policy (fraction of resources consumed)
         frac = self.model(inputs).squeeze() # shape (batch_size,)
-        
+
         # Current resources
         resources = A * (k ** p.alpha) + (1.0 - p.delta) * k
         c = frac * resources
-        
+
         # Next capital
         k_next = resources - c
         # Clamp k_next to stay within bounds for stability (and logic)
         k_next = torch.clamp(k_next, k_low, k_high)
-        
+
         # Re-calculate c consistent with clamped k_next (budget constraint)
         c = resources - k_next
         c = torch.clamp(c, min=1e-6) # Numerical safety
-        
+
         # Marginal utility at t
         mu = c ** (-gamma)
-        
+
         # Compute Expectation using Quadrature
         # We need to compute RHS for each quadrature node
         expected_rhs = torch.zeros_like(mu)
-        
+
         k_next_norm = self.normalize(k_next, k_low, k_high)
-        
+
         for i in range(self.n_quad):
             eps = self.z_nodes[i]
             weight = self.z_weights[i]
-            
+
             # Next A
             # log(A') = rho * log(A) + sigma_eps * eps
             log_A_next = rho * torch.log(A) + p.sigma_eps * eps
             A_next = torch.exp(log_A_next)
-            
+
             # Normalize A_next for network input
             A_next_norm = self.normalize(A_next, p.A_bounds[0], p.A_bounds[1])
-            
+
             # Prepare next state inputs
             # Only k and A change; beta, rho, gamma stay same (parameters)
             inputs_next = torch.stack([
-                k_next_norm, 
-                A_next_norm, 
-                beta_norm, 
-                rho_norm, 
+                k_next_norm,
+                A_next_norm,
+                beta_norm,
+                rho_norm,
                 gamma_norm
             ], dim=1)
-            
+
             # Predict policy at t+1
             frac_next = self.model(inputs_next).squeeze()
-            
+
             # Resources at t+1
             resources_next = A_next * (k_next ** p.alpha) + (1.0 - p.delta) * k_next
-            
+
             # k''
             k_next_next = (1.0 - frac_next) * resources_next
             k_next_next = torch.clamp(k_next_next, k_low, k_high)
-            
+
             # c at t+1
             c_next = resources_next - k_next_next
             c_next = torch.clamp(c_next, min=1e-6)
-            
+
             # Marginal utility at t+1
             mu_next = c_next ** (-gamma)
-            
+
             # Return at t+1
             R_next = p.alpha * A_next * (k_next ** (p.alpha - 1.0)) + (1.0 - p.delta)
-            
+
             # Accumulate weighted expectation
             expected_rhs += weight * (beta * mu_next * R_next)
-            
+
         # Residual
         residuals = expected_rhs - mu
         return residuals
