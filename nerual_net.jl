@@ -63,9 +63,9 @@ println("Initializing output bias to: $init_bias (SS frac: $frac_ss_init)")
 
 #Now construct the neural network
 model = Chain(
-    Dense(5, 128, leakyrelu),
-    Dense(128, 64, leakyrelu),
-    Dense(64, 32, leakyrelu),
+    Dense(5, 128, elu),
+    Dense(128, 64, elu),
+    Dense(64, 32, elu),
     Dense(32, 1, sigmoid; bias=[init_bias])  # output layer
 )
 
