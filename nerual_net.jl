@@ -142,6 +142,7 @@ function euler_residual_batch(para, model, data)
 
             # Next state A'
             A_next = exp.(log.(A) .* ρ .+ σ_ε .* eps)
+            A_next = clamp.(A_next, A_bounds[1], A_bounds[2])
 
             # Normalize for network input
             A_next_norm = normalize(A_next, A_bounds[1], A_bounds[2])

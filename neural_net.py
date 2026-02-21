@@ -199,7 +199,7 @@ class RBCSolver:
             # log(A') = rho * log(A) + sigma_eps * eps
             log_A_next = rho * torch.log(A) + p.sigma_eps * eps
             A_next = torch.exp(log_A_next)
-
+            A_next = torch.clamp(A_next, p.A_bounds[0], p.A_bounds[1])
             # Normalize A_next for network input
             A_next_norm = self.normalize(A_next, p.A_bounds[0], p.A_bounds[1])
 
@@ -572,37 +572,6 @@ def run_impulse_response_ti(solver: RBCTISolver, policy_interp, shock_size=0.05,
     plt.savefig("TI_Impulse_Response_Py.png")
     logger.info("TI Impulse response figure saved.")
 
-def check_potential_problems(params: Params):
-    """
-    Checks for potential sources of discrepancy between NN and TI.
-    """
-    logger.info("Checking for potential discrepancies...")
-
-    # 1. Grid Bounds vs Distribution
-    # TI is bounded by k_bounds and A_bounds. NN is trained on samples.
-    # If simulation goes outside bounds, TI clamps/extrapolates, NN extrapolates.
-    # A is lognormal, so it has infinite support.
-    sigma_stat = params.sigma_eps / np.sqrt(1 - params.rho**2)
-    log_A_std = sigma_stat
-    # 99% interval for A
-    A_low_99 = np.exp(-2.58 * log_A_std)
-    A_high_99 = np.exp(2.58 * log_A_std)
-
-    if A_low_99 < params.A_bounds[0] or A_high_99 > params.A_bounds[1]:
-        logger.warning(f"Potential Issue: A distribution (99% interval [{A_low_99:.3f}, {A_high_99:.3f}]) "
-                       f"exceeds grid bounds [{params.A_bounds[0]}, {params.A_bounds[1]}]. "
-                       "TI relies on extrapolation here, which may diverge from NN.")
-
-    # 2. Interpolation
-    logger.info("Note: TI uses Cubic Splines (local), NN uses Global approximation. "
-                "Differences in smoothness and extrapolation behavior are expected.")
-
-    # 3. Simulation Clamping
-    logger.info("Note: NN simulation clamps capital to be positive (max(k, 1e-6)). "
-                "TI simulation (in Julia and here) does not explicitly clamp k_next. "
-                "If TI policy leads to negative capital (e.g. due to extrapolation error), "
-                "the simulation will crash or produce NaNs, whereas NN will survive.")
-
 def main():
     params = Params()
     # Detect MPS (Apple Silicon) or CUDA
@@ -617,7 +586,7 @@ def main():
     solver = RBCSolver(params, device=device)
     
     # Train
-    losses = solver.train(batch_size=2048, epochs=5000) 
+    losses = solver.train(batch_size=2048, epochs=20000) 
     
     # Plot Loss
     plt.figure()
@@ -634,8 +603,6 @@ def main():
     # ==========================================
     # COMPARISON: Time Iteration vs Neural Network
     # ==========================================
-    
-    check_potential_problems(params)
     
     if SCIPY_AVAILABLE:
         # Time Iteration
