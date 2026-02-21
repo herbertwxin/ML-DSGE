@@ -98,9 +98,9 @@ function euler_residual_batch(para, model, data)
     ρ = denormalize(ρ_batch, ρ_bounds[1], ρ_bounds[2])
     γ = denormalize(γ_batch, γ_bounds[1], γ_bounds[2])
 
-    # Re-calculate SS inside loop or use passed globals?
-    # Calling steady_state is cheap.
-    k_ss, c_ss, y_ss, A_ss = steady_state(α, β, δ)
+    # Use fixed-parameter steady state (single economy) so NN trains on same state space as TI.
+    # Python uses self.k_ss (fixed); using para.β here aligns Julia with Python and yields NN ≈ TI.
+    k_ss, c_ss, y_ss, A_ss = steady_state(α, para.β, δ)
 
     batch_size = length(k_batch)
     k_low = k_bounds[1] * k_ss
@@ -128,9 +128,8 @@ function euler_residual_batch(para, model, data)
     c = (1.0f0 .- δ) .* k .+ A .* (k .^ α) .- k_next
     marginal_utility = c .^ (-γ)
 
-    # Expectation calculation using Quadrature (aligning with TI)
-    n_quad = 5
-    # Use pre-computed globals to avoid Zygote differentiation issues
+    # Expectation: use 7 nodes to match TI (solve_ti uses n_quad=7). Mismatch caused NN vs TI to diverge.
+    n_quad = 7
     z_nodes = z_nodes_global
     z_weights = z_weights_global
 
@@ -187,7 +186,7 @@ end
 
 # Hyperparameters
 batch_size = 2048      # number of state points per batch
-epochs = 40000         # training epochs
+epochs = 20000        # training epochs
 η = 5e-4               # initial learning rate
 
 # Initialize optimizer
@@ -360,6 +359,9 @@ println("Figure saved.")
 
 # ==========================================
 # COMPARISON: Time Iteration vs Neural Network
+# For NN and TI to match (as in neural_net.py), two things must align:
+# 1. Same quadrature: euler_residual_batch and solve_ti both use n_quad=7.
+# 2. Same state space: training uses fixed-parameter k_ss (para.β) so single economy.
 # ==========================================
 
 """
