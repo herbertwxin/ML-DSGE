@@ -187,7 +187,7 @@ end
 
 # Hyperparameters
 batch_size = 2048      # number of state points per batch
-epochs = 10000         # training epochs
+epochs = 40000         # training epochs
 η = 5e-4               # initial learning rate
 
 # Initialize optimizer

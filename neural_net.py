@@ -93,7 +93,7 @@ class RBCSolver:
         
         # Quadrature nodes (Hermite-Gauss)
         # 5 nodes
-        self.n_quad = 3
+        self.n_quad = 7
         nodes, weights = np.polynomial.hermite.hermgauss(self.n_quad)
         # Transform from e^(-x^2) to N(0,1)
         # nodes = sqrt(2) * x_i
@@ -586,7 +586,7 @@ def main():
     solver = RBCSolver(params, device=device)
     
     # Train
-    losses = solver.train(batch_size=2048, epochs=20000) 
+    losses = solver.train(batch_size=2048, epochs=40000) 
     
     # Plot Loss
     plt.figure()
