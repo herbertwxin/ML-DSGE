@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import logging
 from pathlib import Path
 
-from learn_rbc import Params, RBCSolver
+from learn_rbc import Params, RBCSolver, get_device
 from rbc_TimeIter import RBCTISolver
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -43,8 +43,7 @@ def get_nn_solver(train_if_missing: bool = True, device: str = None):
     otherwise train and save, then return.
     """
     if device is None:
-        import torch
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = get_device()
     path = Path(CHECKPOINT_PATH)
     if path.exists():
         return RBCSolver.load(str(path), device=device)

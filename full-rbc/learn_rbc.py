@@ -22,6 +22,18 @@ torch.manual_seed(42)
 np.random.seed(42)
 
 
+def get_device() -> str:
+    """
+    Return the best available device: CUDA (NVIDIA GPU) > MPS (Apple Silicon) > CPU.
+    Use this so training runs on GPU when available, including on Apple devices.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 @dataclass
 class Params:
     """Model parameters for the RBC model. Defaults are reference values; we train over ranges."""
@@ -336,7 +348,7 @@ class RBCSolver:
     def load(path: str, device: str = None) -> "RBCSolver":
         """Load solver from checkpoint (no training)."""
         if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            device = get_device()
         d = torch.load(path, map_location=device)
         params = Params(**d["params"])
         solver = RBCSolver(params, device=device)
@@ -347,8 +359,10 @@ class RBCSolver:
 
 if __name__ == "__main__":
     # Train one NN to approximate the RBC policy over the full parameter space
+    device = get_device()
+    logger.info("Using device: %s", device)
     params = Params()
-    solver = RBCSolver(params, device="cuda" if torch.cuda.is_available() else "cpu")
+    solver = RBCSolver(params, device=device)
     losses = solver.train(batch_size=2048, epochs=10000)
 
     # Simulate at default calibration
