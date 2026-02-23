@@ -16,9 +16,25 @@ logger = logging.getLogger(__name__)
 
 # Default checkpoint path (same as learn_rbc.save)
 CHECKPOINT_PATH = "rbc_nn.pt"
-# Same calibration for both methods
+# Simulation length and seed (same for NN and TI)
 T_SIM = 200
 SIM_SEED = 123
+
+
+def get_calibration_params():
+    """
+    Parameter set used for comparison (TI solve + both simulations).
+    Edit this to use a different calibration; must lie within the bounds
+    used when training the NN (see learn_rbc.Params alpha_bounds, etc.).
+    """
+    return Params(
+        alpha=0.30,
+        beta=0.95,
+        delta=0.10,
+        gamma=2.0,
+        rho=0.90,
+        sigma_eps=0.02,
+    )
 
 
 def get_nn_solver(train_if_missing: bool = True, device: str = None):
@@ -45,23 +61,33 @@ def get_nn_solver(train_if_missing: bool = True, device: str = None):
 
 
 def run_comparison(
+    params=None,
     train_if_missing: bool = True,
     device: str = None,
     save_plot: str = "rbc_comparison.png",
 ):
     """
-    Run NN and TI at the same calibration (default Params), same shock seed,
-    and plot consumption, capital, output, investment.
+    Run NN and TI at the same calibration, same shock seed, and plot.
+
+    params: Params instance for this calibration. If None, uses get_calibration_params().
     """
-    params = Params()
+    if params is None:
+        params = get_calibration_params()
     # ----- NN: load or train -----
     nn_solver = get_nn_solver(train_if_missing=train_if_missing, device=device)
     # ----- TI: solve at same params -----
     ti_solver = RBCTISolver(params)
     policy_ti = ti_solver.solve()
-    # ----- Same seed for both simulations -----
+    # ----- Same seed for both simulations; NN simulate at this calibration -----
     np.random.seed(SIM_SEED)
-    nn_results = nn_solver.simulate(T=T_SIM)
+    nn_results = nn_solver.simulate(
+        T=T_SIM,
+        alpha=params.alpha,
+        beta=params.beta,
+        delta=params.delta,
+        rho=params.rho,
+        gamma=params.gamma,
+    )
     np.random.seed(SIM_SEED)
     ti_results = ti_solver.simulate(policy_ti, T=T_SIM)
     # ----- Comparison plot -----
@@ -96,4 +122,6 @@ def run_comparison(
 
 
 if __name__ == "__main__":
-    run_comparison(train_if_missing=True, save_plot="rbc_comparison.png")
+    # Use calibration from get_calibration_params(); override with e.g.:
+    #   run_comparison(params=Params(alpha=0.33, beta=0.97, ...), ...)
+    run_comparison(params=get_calibration_params(), train_if_missing=True, save_plot="rbc_comparison.png")
