@@ -9,8 +9,9 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import logging
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
@@ -321,6 +322,28 @@ class RBCSolver:
             "investment": i_series,
         }
 
+    def save(self, path: str = "rbc_nn.pt") -> None:
+        """Save trained model and Params so we can load without retraining."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {"state_dict": self.model.state_dict(), "params": asdict(self.p)},
+            path,
+        )
+        logger.info(f"Saved model and params to {path}")
+
+    @staticmethod
+    def load(path: str, device: str = None) -> "RBCSolver":
+        """Load solver from checkpoint (no training)."""
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        d = torch.load(path, map_location=device)
+        params = Params(**d["params"])
+        solver = RBCSolver(params, device=device)
+        solver.model.load_state_dict(d["state_dict"])
+        logger.info(f"Loaded model from {path}")
+        return solver
+
 
 if __name__ == "__main__":
     # Train one NN to approximate the RBC policy over the full parameter space
@@ -346,3 +369,5 @@ if __name__ == "__main__":
     plt.savefig("learn_rbc_loss.png", dpi=150)
     plt.close()
     logger.info("Saved learn_rbc_loss.png")
+    # Save checkpoint so compare_rbc.py (and future runs) can skip training
+    solver.save("rbc_nn.pt")
