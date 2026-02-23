@@ -363,7 +363,7 @@ if __name__ == "__main__":
     logger.info("Using device: %s", device)
     params = Params()
     solver = RBCSolver(params, device=device)
-    losses = solver.train(batch_size=2048, epochs=10000)
+    losses = solver.train(batch_size=2048, epochs=50000)
 
     # Simulate at default calibration
     sim_default = solver.simulate(T=200)
