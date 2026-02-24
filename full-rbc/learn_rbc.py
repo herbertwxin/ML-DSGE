@@ -103,7 +103,7 @@ class RBCSolver:
         logger.info(f"Output bias init: {init_bias:.3f} (SS frac: {frac_ss_init:.3f})")
 
         # 7 inputs: k_norm, A_norm, alpha_norm, beta_norm, delta_norm, rho_norm, gamma_norm
-        self.model = RBCNet(7, [128, 64, 32], 1, output_bias=init_bias).to(self.device)
+        self.model = RBCNet(7, [256, 128, 64, 32], 1, output_bias=init_bias).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=5e-4)
 
         # Hermite-Gauss quadrature for E[·] in Euler equation
@@ -270,11 +270,12 @@ class RBCSolver:
         delta: float = None,
         rho: float = None,
         gamma: float = None,
+        sigma_eps: float = None,
     ) -> dict:
         """
         Simulate the economy at a given parameter point. Uses solver default
         params for any argument left as None. After training over a wide range,
-        you can simulate at any (alpha, beta, delta, rho, gamma) within bounds.
+        you can simulate at any (alpha, beta, delta, rho, gamma, sigma_eps) within bounds.
         """
         self.model.eval()
         p = self.p
@@ -283,6 +284,7 @@ class RBCSolver:
         delta = delta if delta is not None else p.delta
         rho = rho if rho is not None else p.rho
         gamma = gamma if gamma is not None else p.gamma
+        sigma_eps = sigma_eps if sigma_eps is not None else p.sigma_eps
 
         k_ss_sim, c_ss_sim, y_ss_sim, _ = self._steady_state(alpha, beta, delta)
         if k0 is None:
@@ -323,7 +325,7 @@ class RBCSolver:
                 c_series[t] = c
                 i_series[t] = y - c
                 k_series[t + 1] = max((1.0 - delta) * k + y - c, 1e-6)
-                log_A_next = rho * np.log(max(A, 1e-8)) + p.sigma_eps * eps_series[t]
+                log_A_next = rho * np.log(max(A, 1e-8)) + sigma_eps * eps_series[t]
                 A_series[t + 1] = np.exp(log_A_next)
 
         return {
@@ -373,15 +375,17 @@ if __name__ == "__main__":
     sim_alt = solver.simulate(T=200, alpha=0.33, beta=0.97, delta=0.08, rho=0.95, gamma=1.5)
     logger.info("Simulation at alternate params done.")
 
-    # Optional: plot training loss
+    # Optional: plot training loss (output in same folder as script)
+    out_dir = Path(__file__).resolve().parent
+    loss_plot = out_dir / "learn_rbc_loss.png"
     plt.figure(figsize=(6, 4))
     plt.semilogy(losses, alpha=0.8)
     plt.xlabel("Epoch")
     plt.ylabel("MSE (Euler residual)")
     plt.title("RBC NN training over wide parameter range")
     plt.tight_layout()
-    plt.savefig("learn_rbc_loss.png", dpi=150)
+    plt.savefig(loss_plot, dpi=150)
     plt.close()
-    logger.info("Saved learn_rbc_loss.png")
-    # Save checkpoint so compare_rbc.py (and future runs) can skip training
-    solver.save("rbc_nn.pt")
+    logger.info("Saved %s", loss_plot)
+    # Save checkpoint in full-rbc so compare_rbc.py (and future runs) can skip training
+    solver.save(str(out_dir / "rbc_nn.pt"))

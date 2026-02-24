@@ -14,8 +14,9 @@ from rbc_TimeIter import RBCTISolver
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Default checkpoint path (same as learn_rbc.save)
-CHECKPOINT_PATH = "rbc_nn.pt"
+# All paths under full-rbc (script directory) so inputs/outputs stay in this folder
+FULL_RBC_DIR = Path(__file__).resolve().parent
+CHECKPOINT_PATH = FULL_RBC_DIR / "rbc_nn.pt"
 # Simulation length and seed (same for NN and TI)
 T_SIM = 200
 SIM_SEED = 123
@@ -30,9 +31,9 @@ def get_calibration_params():
     return Params(
         alpha=0.30,
         beta=0.95,
-        delta=0.10,
+        delta=0.20,
         gamma=2.0,
-        rho=0.90,
+        rho=0.70,
         sigma_eps=0.02,
     )
 
@@ -40,11 +41,11 @@ def get_calibration_params():
 def get_nn_solver(train_if_missing: bool = True, device: str = None):
     """
     Return an RBCSolver with trained weights. Load from checkpoint if it exists;
-    otherwise train and save, then return.
+    otherwise train and save, then return. Checkpoint is read from full-rbc folder.
     """
     if device is None:
         device = get_device()
-    path = Path(CHECKPOINT_PATH)
+    path = CHECKPOINT_PATH
     if path.exists():
         return RBCSolver.load(str(path), device=device)
     if not train_if_missing:
@@ -54,7 +55,7 @@ def get_nn_solver(train_if_missing: bool = True, device: str = None):
     logger.info("No checkpoint found; training NN...")
     params = Params()
     solver = RBCSolver(params, device=device)
-    solver.train(batch_size=2048, epochs=10000)
+    solver.train(batch_size=2048, epochs=50000)
     solver.save(CHECKPOINT_PATH)
     return solver
 
@@ -72,12 +73,12 @@ def run_comparison(
     """
     if params is None:
         params = get_calibration_params()
-    # ----- NN: load or train -----
+    # ----- NN: load or train (weights only; calibration is applied at simulate time) -----
     nn_solver = get_nn_solver(train_if_missing=train_if_missing, device=device)
     # ----- TI: solve at same params -----
     ti_solver = RBCTISolver(params)
     policy_ti = ti_solver.solve()
-    # ----- Same seed for both simulations; NN simulate at this calibration -----
+    # ----- Same seed for both simulations; NN evaluated at this calibration (all params fed in) -----
     np.random.seed(SIM_SEED)
     nn_results = nn_solver.simulate(
         T=T_SIM,
@@ -86,11 +87,12 @@ def run_comparison(
         delta=params.delta,
         rho=params.rho,
         gamma=params.gamma,
+        sigma_eps=params.sigma_eps,
     )
     np.random.seed(SIM_SEED)
     ti_results = ti_solver.simulate(policy_ti, T=T_SIM)
     # ----- Comparison plot -----
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    fig, axes = plt.subplots(3, 2, figsize=(10, 10))
     t = np.arange(T_SIM)
     axes[0, 0].plot(t, nn_results["consumption"], label="NN", linewidth=1.5)
     axes[0, 0].plot(t, ti_results["consumption"], label="TI", linewidth=1.5, linestyle="--", alpha=0.9)
@@ -112,15 +114,29 @@ def run_comparison(
     axes[1, 1].set_title("Investment")
     axes[1, 1].legend()
     axes[1, 1].set_xlabel("t")
+    # TFP (productivity): same shock seed => same path for NN and TI
+    axes[2, 0].plot(t, nn_results["productivity"], label="NN", linewidth=1.5)
+    axes[2, 0].plot(t, ti_results["productivity"], label="TI", linewidth=1.5, linestyle="--", alpha=0.9)
+    axes[2, 0].set_title("TFP (productivity)")
+    axes[2, 0].legend()
+    axes[2, 0].set_xlabel("t")
+    axes[2, 1].set_visible(False)
     plt.suptitle("RBC: Neural network vs Time Iteration (same calibration, same seed)")
     plt.tight_layout()
-    plt.savefig(save_plot, dpi=150)
+    plot_path = Path(save_plot)
+    if not plot_path.is_absolute():
+        plot_path = FULL_RBC_DIR / plot_path
+    plt.savefig(plot_path, dpi=150)
     plt.close()
-    logger.info("Saved comparison plot to %s", save_plot)
+    logger.info("Saved comparison plot to %s", plot_path)
     return nn_results, ti_results
 
 
 if __name__ == "__main__":
     # Use calibration from get_calibration_params(); override with e.g.:
     #   run_comparison(params=Params(alpha=0.33, beta=0.97, ...), ...)
-    run_comparison(params=get_calibration_params(), train_if_missing=True, save_plot="rbc_comparison.png")
+    run_comparison(
+        params=get_calibration_params(),
+        train_if_missing=True,
+        save_plot=str(FULL_RBC_DIR / "rbc_comparison.png"),
+    )
