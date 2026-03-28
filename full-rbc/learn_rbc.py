@@ -9,6 +9,7 @@ import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, asdict
 import logging
 from pathlib import Path
@@ -59,6 +60,11 @@ class Params:
     rho_bounds: tuple = (0.85, 0.99)      # persistence of productivity
     gamma_bounds: tuple = (0.5, 4.0)     # risk aversion
     sigma_eps_bounds: tuple = (0.005, 0.05)  # shock innovation std (NN input + A scaling)
+
+    # Oversampling settings for hard region (high beta, low delta) in training batches.
+    hard_region_prob: float = 0.0
+    hard_beta_low_norm: float = 0.85   # beta_norm sampled from [hard_beta_low_norm, 1]
+    hard_delta_high_norm: float = 0.20 # delta_norm sampled from [0, hard_delta_high_norm]
 
 
 def a_support_from_shock_params(
@@ -133,7 +139,7 @@ class RBCSolver:
         logger.info(f"Output bias init: {init_bias:.3f} (SS frac: {frac_ss_init:.3f})")
 
         # 8 inputs: k_norm, A_norm, ..., sigma_eps_norm (A_norm uses (rho, sigma_eps)-dependent bounds)
-        self.model = RBCNet(8, [256, 128, 64, 32], 1, output_bias=init_bias).to(self.device)
+        self.model = RBCNet(8, [512, 256, 128, 64, 32, 16], 1, output_bias=init_bias).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=5e-4)
 
         # Hermite-Gauss quadrature for E[·] in Euler equation
@@ -230,12 +236,31 @@ class RBCSolver:
         from rbc_TimeIter import RBCTISolver
 
         rng = np.random.default_rng(seed)
-        panel = []
-        for i in range(n_cases):
-            p_i = self._sample_params_numpy(rng)
+        params_list = [self._sample_params_numpy(rng) for _ in range(n_cases)]
+
+        def _solve_ti_item(item):
+            idx, p_i = item
             ti_solver = RBCTISolver(p_i)
             ti_policy = ti_solver.solve()
-            panel.append({"params": p_i, "ti_solver": ti_solver, "ti_policy": ti_policy, "seed": seed + i})
+            return idx, p_i, ti_solver, ti_policy
+
+        panel = [None] * n_cases
+        workers = min(8, n_cases)
+        if workers > 1:
+            logger.info("Building validation TI panel in parallel (%d workers)...", workers)
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                for idx, p_i, ti_solver, ti_policy in ex.map(_solve_ti_item, list(enumerate(params_list))):
+                    panel[idx] = {
+                        "params": p_i,
+                        "ti_solver": ti_solver,
+                        "ti_policy": ti_policy,
+                        "seed": seed + idx,
+                    }
+        else:
+            for idx, p_i in enumerate(params_list):
+                ti_solver = RBCTISolver(p_i)
+                ti_policy = ti_solver.solve()
+                panel[idx] = {"params": p_i, "ti_solver": ti_solver, "ti_policy": ti_policy, "seed": seed + idx}
         return panel
 
     def _evaluate_validation_panel(self, panel, T: int) -> dict:
@@ -296,9 +321,16 @@ class RBCSolver:
         gamma_batch = torch.rand(batch_size, device=self.device)
         sigma_eps_batch = torch.rand(batch_size, device=self.device)
 
-        rho_val = self.denormalize(rho_batch, p.rho_bounds[0], p.rho_bounds[1])
-        sigma_eps_val = self.denormalize(sigma_eps_batch, p.sigma_eps_bounds[0], p.sigma_eps_bounds[1])
-        A_low, A_high = self._A_bounds_tensors(rho_val, sigma_eps_val)
+        # Oversample hard region: high beta and low delta.
+        if p.hard_region_prob > 0.0:
+            hard_mask = torch.rand(batch_size, device=self.device) < p.hard_region_prob
+            n_hard = int(hard_mask.sum().item())
+            if n_hard > 0:
+                beta_batch[hard_mask] = p.hard_beta_low_norm + (1.0 - p.hard_beta_low_norm) * torch.rand(
+                    n_hard, device=self.device
+                )
+                delta_batch[hard_mask] = p.hard_delta_high_norm * torch.rand(n_hard, device=self.device)
+
         A_norm_batch = torch.rand(batch_size, device=self.device)
 
         # Order: k, A_norm, alpha, beta, delta, rho, gamma, sigma_eps
@@ -344,10 +376,9 @@ class RBCSolver:
         # Current resources (use per-sample alpha, delta)
         resources = A * (k ** alpha) + (1.0 - delta) * k
         c = frac * resources
-        k_next = resources - c
-        k_next = torch.clamp(k_next, k_low, k_high)
-        c = resources - k_next
-        c = torch.clamp(c, min=1e-6)
+        # Match simulation dynamics: no state-box clamp, only positivity guards.
+        k_next = (resources - c).clamp(min=1e-8)
+        c = c.clamp(min=1e-6)
 
         mu = c ** (-gamma)
         expected_rhs = torch.zeros_like(mu)
@@ -358,7 +389,6 @@ class RBCSolver:
             weight = self.z_weights[i]
             log_A_next = rho * torch.log(A.clamp(min=1e-8)) + sigma_eps * eps
             A_next = torch.exp(log_A_next)
-            A_next = torch.clamp(A_next, A_low, A_high)
             A_next_norm = self.normalize(A_next, A_low, A_high)
 
             inputs_next = torch.stack([
@@ -374,8 +404,7 @@ class RBCSolver:
 
             frac_next = self.model(inputs_next).squeeze()
             resources_next = A_next * (k_next ** alpha) + (1.0 - delta) * k_next
-            k_next_next = (1.0 - frac_next) * resources_next
-            k_next_next = torch.clamp(k_next_next, k_low, k_high)
+            k_next_next = ((1.0 - frac_next) * resources_next).clamp(min=1e-8)
             c_next = (resources_next - k_next_next).clamp(min=1e-6)
             mu_next = c_next ** (-gamma)
             R_next = alpha * A_next * (k_next ** (alpha - 1.0)) + (1.0 - delta)

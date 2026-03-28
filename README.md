@@ -1,143 +1,200 @@
-# ML-DSGE: Solving DSGE Models with Machine Learning
+# ML-DSGE
 
-This repository implements machine learning techniques to solve Dynamic Stochastic General Equilibrium (DSGE) models, with a focus on neural network-based policy function approximation.
+Neural-network-based solvers for DSGE models, with an emphasis on economic interpretability and direct benchmarking against classical numerical methods.
 
-## Overview
+Current main implementation: a stochastic RBC model solved by:
+- a neural policy approximation (`full-rbc/learn_rbc.py`)
+- a Time Iteration benchmark (`full-rbc/rbc_TimeIter.py`)
 
-Traditional methods for solving DSGE models (e.g., perturbation, projection, value function iteration) can be computationally expensive and may struggle with high-dimensional state spaces or non-linearities. This project explores **neural networks as universal function approximators** to learn policy functions that satisfy the model's equilibrium conditions (e.g., Euler equations) across a wide range of parameter values.
+---
 
-## General Approach
+## Motivation
 
-### Core Methodology
+Classical global methods are reliable but expensive and can scale poorly as models gain states, shocks, and nonlinearities.  
+This project studies a hybrid workflow:
+- train one NN policy over a parameter region,
+- validate aggressively against a trusted baseline (TI),
+- diagnose where and why discrepancies occur (not just average error).
 
-1. **Policy Function Approximation**: Instead of solving for the exact policy function analytically, we train a neural network to approximate it by minimizing Euler equation residuals.
+The goal is research utility: concise code, transparent diagnostics, and reproducible comparison artifacts.
 
-2. **Wide Parameter Space Learning**: Rather than solving for a single calibration, the neural network learns the policy function over a **range of structural parameters** (e.g., discount factor, risk aversion, capital share). This allows the model to generalize across different calibrations without retraining.
+---
 
-3. **Residual-Based Training**: The network is trained to satisfy the model's equilibrium conditions (typically Euler equations) by minimizing the squared residuals:
-   ```
-   Loss = E[(Euler_residual)²]
-   ```
-   where the expectation is taken over random samples of state variables and parameters.
+## Repository Structure
 
-4. **Comparison with Traditional Methods**: Results are validated against traditional solution methods (e.g., Time Iteration with cubic splines) to ensure accuracy.
-
-### Key Advantages
-
-- **Scalability**: Neural networks can handle high-dimensional state spaces more efficiently than grid-based methods.
-- **Generalization**: A single trained network can approximate policies across a wide parameter space.
-- **Flexibility**: Easy to extend to more complex models (e.g., multiple agents, additional shocks, non-linearities).
-- **Differentiability**: Automatic differentiation enables efficient gradient-based optimization.
-
-## Project Structure
-
-```
+```text
 ML-DSGE/
-├── full-rbc/          # Full RBC model implementation
-│   ├── learn_rbc.py      # Neural network solver for RBC
-│   ├── rbc_TimeIter.py    # Traditional Time Iteration solver
-│   ├── compare_rbc.py     # Comparison script (NN vs TI)
-│   ├── diagnose_divergence.py  # Automated parameter-sweep diagnostics (NN vs TI)
-│   └── simulation/        # Generated divergence outputs (plots, CSV, JSON)
-├── poc/               # Proof-of-concept implementations
-│   └── neural_net.py      # Early neural network experiments
-├── lstm/              # LSTM-based approaches (exploratory)
-└── README.md          # This file
+├── full-rbc/
+│   ├── learn_rbc.py             # Canonical training entrypoint + RBC NN solver
+│   ├── rbc_TimeIter.py          # Time Iteration (cubic spline) benchmark
+│   ├── compare_rbc.py           # Single-calibration NN vs TI comparison
+│   ├── diagnose_divergence.py   # Parameter-sweep diagnostics (parallel)
+│   ├── simulation/              # Generated divergence outputs (csv/json/png)
+│   ├── rbc_nn.pt                # Trained checkpoint (generated)
+│   ├── rbc_comparison.png       # Comparison figure (generated)
+│   ├── rbc_paths.csv            # Time paths (generated)
+│   └── rbc_metrics.json         # Metrics summary (generated)
+├── poc/
+├── lstm/
+└── README.md
 ```
 
-## Current Implementation: Real Business Cycle (RBC) Model
+---
 
-### Model Description
+## RBC Model (Current Scope)
 
-The RBC model features:
-- **State variables**: Capital stock (k) and productivity (A)
-- **Control variable**: Consumption (c)
-- **Structural parameters**: Capital share (α), discount factor (β), depreciation (δ), risk aversion (γ), persistence (ρ), shock volatility (σ_ε)
+### States / Control
+- State: capital `k`, productivity `A`
+- Control: consumption `c`
 
-### Neural Network Architecture
+### Structural parameters
+- `alpha`: capital share
+- `beta`: discount factor
+- `delta`: depreciation rate
+- `gamma`: CRRA risk aversion
+- `rho`: productivity persistence
+- `sigma_eps`: shock innovation std
 
-- **Inputs**: Normalized (k, A, α, β, δ, ρ, γ, σ_ε) — 8 dimensions
-- **Output**: Consumption fraction (sigmoid → [0,1])
-- **Architecture**: Feedforward network with ELU activations
-- **Training**: Adam optimizer minimizing Euler equation residuals
+Productivity law of motion:
+- `log A_{t+1} = rho * log A_t + sigma_eps * eps_{t+1}`
+- `eps ~ N(0, 1)`
 
-### State Scaling and Comparability
+---
 
-- **Dynamic productivity scaling**: A is normalized with parameter-dependent bounds from the stationary scale of log TFP,
-  $$\sigma_{\text{stat}} = \frac{\sigma_\varepsilon}{\sqrt{1-\rho^2}}, \quad
-  A \in [\exp(-n\sigma_{\text{stat}}), \exp(n\sigma_{\text{stat}})]$$
-  where `n = A_sigma_mult`.
-- **TI alignment**: `rbc_TimeIter.py` uses the same productivity support rule for the spline grid at a given calibration, improving NN/TI comparability.
+## Solver Design
 
-### Usage
+### 1) Neural solver (`learn_rbc.py`)
 
-1. **Train the neural network** (or load from checkpoint):
-   ```bash
-   python full-rbc/learn_rbc.py
-   ```
-   This trains over a wide parameter range and saves the model to `rbc_nn.pt`.
+Policy network predicts consumption share from normalized inputs:
+- Inputs (8D): `(k_norm, A_norm, alpha_norm, beta_norm, delta_norm, rho_norm, gamma_norm, sigma_eps_norm)`
+- Output: `frac in (0,1)` via sigmoid
+- Consumption: `c = frac * resources`
 
-2. **Compare with Time Iteration**:
-   ```bash
-   python full-rbc/compare_rbc.py
-   ```
-   This loads the trained NN checkpoint (pre-trained via `learn_rbc.py`), solves via TI, runs simulations with the same seed, and generates comparison plots.
-   It also saves:
-   - `full-rbc/rbc_paths.csv` (full NN/TI time paths for all variables + differences)
-   - `full-rbc/rbc_metrics.json` (RMSE/NRMSE summary by variable)
+Training objective:
+- Euler equation residual MSE with Hermite-Gauss quadrature expectation.
 
-3. **Specify calibration**: Edit `get_calibration_params()` in `compare_rbc.py` to change the parameter set used for comparison.
+Important implementation details:
+- Dynamic productivity normalization uses stationary log-TFP scale:
+  - `sigma_stat = sigma_eps / sqrt(1 - rho^2)`
+  - `A` support roughly `exp(± A_sigma_mult * sigma_stat)`.
+- Training uses early stopping on a fixed validation residual set.
+- Fixed TI validation panel is pre-built and evaluated during training.
 
-4. **Run automated divergence diagnostics**:
-   ```bash
-   python full-rbc/diagnose_divergence.py --n-cases 40 --top-k 5 --T 200 --n-workers 8
-   ```
-   This runs random parameter sweeps (parallel), ranks divergence cases, and writes outputs to `full-rbc/simulation/`:
-   - `divergence_summary.csv`
-   - `divergence_top_cases.json`
-   - `divergence_case_XXX_paths.csv`
-   - `divergence_case_XXX_plot.png` (same subplot style as `rbc_comparison`, with parameter box in bottom-right panel)
+### 2) Time Iteration benchmark (`rbc_TimeIter.py`)
 
-## Technical Details
+- Cubic-spline policy over (`k`, `A`) grid.
+- Same calibration object (`Params`) so NN/TI are directly comparable.
+- Same shock seed is used during comparisons.
 
-### Training Process
+---
 
-- **Sampling**: Random batches of (k, A, α, β, δ, ρ, γ, σ_ε) are sampled within specified bounds.
-- **Residual Computation**: For each sample, the Euler equation residual is computed using Hermite-Gauss quadrature for expectations.
-- **Steady State**: Per-sample steady-state capital is computed to maintain consistent state-space scaling across parameters.
-- **Validation set**: A fixed validation batch of Euler residual points is created once and evaluated periodically.
-- **Early stopping**: Training stops when validation MSE fails to improve by a minimum relative amount for a specified patience window.
-- **Best model restore**: The best validation checkpoint is restored at the end of training.
-- **Panel diagnostics**: During training, a fixed validation panel compares NN and TI time paths and logs NRMSE plus level ratios for (c, k, y, i).
+## End-to-End Workflow
 
-### Validation
+### Train NN checkpoint
 
-- **Euler Residuals**: Training loss measures how well the network satisfies equilibrium conditions.
-- **Simulation Comparison**: Side-by-side comparison with Time Iteration at the same calibration and shock sequence.
-- **Parameter Generalization**: Test the network at parameter values not seen during training.
-- **Divergence localization**: Automated diagnostics report where NN/TI differences are largest and whether states leave intended support regions.
+```bash
+python3 full-rbc/learn_rbc.py
+```
 
-## Future Directions
+This writes:
+- `full-rbc/rbc_nn.pt`
+- `full-rbc/learn_rbc_loss.png`
 
-- Extend to more complex DSGE models (e.g., New Keynesian, heterogeneous agents)
-- Explore alternative architectures (e.g., attention mechanisms, graph neural networks)
-- Investigate uncertainty quantification and robustness
-- Compare with other ML approaches (e.g., reinforcement learning, physics-informed neural networks)
+### Compare one calibration (NN vs TI)
+
+```bash
+python3 full-rbc/compare_rbc.py
+```
+
+This writes:
+- `full-rbc/rbc_comparison.png`
+- `full-rbc/rbc_paths.csv`
+- `full-rbc/rbc_metrics.json`
+
+### Sweep many calibrations and diagnose divergence
+
+```bash
+python3 full-rbc/diagnose_divergence.py --n-cases 40 --top-k 5 --T 200 --n-workers 8
+```
+
+Outputs under `full-rbc/simulation/`:
+- `divergence_summary.csv`
+- `divergence_top_cases.json`
+- `divergence_case_XXX_paths.csv`
+- `divergence_case_XXX_plot.png`
+
+---
+
+## Interpreting Diagnostics
+
+### Core metrics
+- `rmse`: absolute path error
+- `nrmse_vs_ti_std = rmse / std(TI series)`: scale-free error
+- `mean_nrmse`, `max_nrmse`: aggregate diagnostics
+- `nn_k_oob_frac`, `ti_k_oob_frac`: share of periods outside solver support
+
+### Practical reading guide
+- `nrmse_A = 0` and overlapping TFP lines mean shock process alignment is correct.
+- Large `nrmse_k` with high correlation can indicate mostly level bias.
+- Large `nrmse_k` with low/negative correlation indicates dynamic mismatch.
+- High OOB fractions usually signal support mismatch rather than pure policy error.
+
+---
+
+## Current Lessons from Experiments
+
+- Matching training dynamics and simulation dynamics matters a lot.
+  - When training residual transitions were overly clamped but simulation was not, divergence worsened.
+- Aggressive targeted oversampling (high-`beta`, low-`delta`) can introduce systematic level bias.
+- Wider/deeper nets alone do not guarantee better fit if objective/sampling are misaligned.
+- Diagnostics that include path-level artifacts are essential to avoid being misled by scalar loss alone.
+
+---
+
+## Configuration Notes
+
+Main parameter ranges are defined in `Params` inside `learn_rbc.py`.  
+These include:
+- structural bounds (`alpha_bounds`, `beta_bounds`, `delta_bounds`, `rho_bounds`, `gamma_bounds`, `sigma_eps_bounds`)
+- state scaling controls (`k_bounds`, `A_sigma_mult`)
+- training sampling controls (including optional hard-region oversampling parameters)
+
+For reproducible experiments, change one mechanism at a time and compare `simulation/divergence_summary.csv` across runs.
+
+---
 
 ## Dependencies
 
-- PyTorch
-- NumPy
-- Matplotlib
-- SciPy (for Time Iteration comparison)
+- Python 3.10+ (recommended)
+- `torch`
+- `numpy`
+- `matplotlib`
+- `scipy`
 
-## References
+Install example:
 
-This work is inspired by recent research on using neural networks for solving economic models, including:
-- Deep learning for solving high-dimensional PDEs (which share structure with HJB equations)
-- Universal function approximation for policy functions
-- Residual-based training for economic equilibrium conditions
+```bash
+python3 -m pip install torch numpy matplotlib scipy
+```
+
+If `ModuleNotFoundError: No module named 'torch'` appears, install `torch` into the same interpreter used to run scripts:
+
+```bash
+python3 -m pip show torch
+python3 -m pip install torch
+```
+
+---
+
+## Roadmap
+
+- Extend the same workflow to richer DSGE settings (e.g., NK, heterogeneous agents).
+- Introduce rollout-aware training terms for long-horizon dynamic consistency.
+- Improve ranking diagnostics with blended scores (normalized + level + correlation).
+- Standardize experiment tracking across model/seed/config runs.
+
+---
 
 ## License
 
-[Specify your license here]
+Add your preferred license text here.
