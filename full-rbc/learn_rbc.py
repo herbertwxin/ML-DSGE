@@ -1,14 +1,14 @@
 """
 Learn RBC (Real Business Cycle) policy with a neural network over a WIDE RANGE
-of structural parameters. The NN is trained to satisfy the Euler equation
-across many (alpha, beta, delta, gamma, rho) so it approximates the whole
-RBC model, not just one calibration.
+of structural parameters. Productivity A is normalized using bounds that depend
+on (rho, sigma_eps) via the unconditional scale of log TFP: sigma_stat = sigma_eps / sqrt(1-rho^2).
 """
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
+import argparse
 from dataclasses import dataclass, asdict
 import logging
 from pathlib import Path
@@ -44,9 +44,13 @@ class Params:
     rho: float = 0.90        # persistence of productivity shock
     sigma_eps: float = 0.02  # std dev of shock innovation (fixed in training)
 
-    # Bounds for state space: k and A as fraction of steady state or level
+    # Bounds for state space: k as fraction of steady-state capital
     k_bounds: tuple = (0.5, 1.5)   # k as fraction of steady-state capital
-    A_bounds: tuple = (0.5, 1.5)   # productivity level
+    # Legacy fixed productivity box (only if you revert TI to fixed grid); default TI uses productivity_grid_bounds()
+    A_bounds: tuple = (0.5, 1.5)
+
+    # How wide the NN's A normalization box is: log A in [-n, +n] * sigma_stat, sigma_stat = sigma_eps/sqrt(1-rho^2)
+    A_sigma_mult: float = 3.0
 
     # Bounds for STRUCTURAL PARAMETERS (NN learns over this whole space)
     alpha_bounds: tuple = (0.20, 0.45)   # capital share
@@ -54,10 +58,36 @@ class Params:
     delta_bounds: tuple = (0.02, 0.15)   # depreciation rate
     rho_bounds: tuple = (0.85, 0.99)      # persistence of productivity
     gamma_bounds: tuple = (0.5, 4.0)     # risk aversion
+    sigma_eps_bounds: tuple = (0.005, 0.05)  # shock innovation std (NN input + A scaling)
+
+
+def a_support_from_shock_params(
+    rho: float,
+    sigma_eps: float,
+    a_sigma_mult: float,
+    a_ss: float = 1.0,
+) -> tuple[float, float]:
+    """
+    Physical productivity support [A_low, A_high] = exp(± n σ_stat) × A_ss,
+    σ_stat = σ_ε / sqrt(1-ρ²). Same rule for NN state normalization and TI spline grid.
+    """
+    one_m = max(1e-4, 1.0 - rho * rho)
+    sigma_stat = sigma_eps / np.sqrt(one_m)
+    w = a_sigma_mult * sigma_stat
+    a_low = float(np.exp(-w) * a_ss)
+    a_high = float(np.exp(w) * a_ss)
+    return a_low, max(a_high, a_low + 1e-6)
+
+
+def productivity_grid_bounds(params: Params, a_ss: float = 1.0) -> tuple[float, float]:
+    """Spline grid limits at calibration; matches NN A_norm denominator at (params.rho, params.sigma_eps)."""
+    return a_support_from_shock_params(params.rho, params.sigma_eps, params.A_sigma_mult, a_ss)
+
 
 class RBCNet(nn.Module):
     """Neural network approximating the policy (consumption fraction) for the RBC model.
-    Inputs: (k_norm, A_norm, alpha_norm, beta_norm, delta_norm, rho_norm, gamma_norm).
+    Inputs: (k_norm, A_norm, alpha_norm, beta_norm, delta_norm, rho_norm, gamma_norm, sigma_eps_norm).
+    A_norm is vs A_low,A_high from stationary log-TFP scale given (rho, sigma_eps).
     Output: fraction of current resources consumed (sigmoid → [0,1]).
     """
 
@@ -81,9 +111,9 @@ class RBCNet(nn.Module):
 
 class RBCSolver:
     """
-    Trains a single NN to approximate the RBC policy over a wide range of
-    (alpha, beta, delta, rho, gamma). Steady state is computed per-sample
-    when parameters vary.
+    Trains a single NN over (alpha, beta, delta, rho, gamma, sigma_eps).
+    Productivity is scaled with bounds A_low, A_high = exp(± n * sigma_stat),
+    sigma_stat = sigma_eps / sqrt(1 - rho^2), so A_norm is comparable across shock processes.
     """
 
     def __init__(self, params: Params, device: str = "cpu"):
@@ -102,8 +132,8 @@ class RBCSolver:
         init_bias = np.log(frac_ss_init / (1.0 - frac_ss_init))
         logger.info(f"Output bias init: {init_bias:.3f} (SS frac: {frac_ss_init:.3f})")
 
-        # 7 inputs: k_norm, A_norm, alpha_norm, beta_norm, delta_norm, rho_norm, gamma_norm
-        self.model = RBCNet(7, [256, 128, 64, 32], 1, output_bias=init_bias).to(self.device)
+        # 8 inputs: k_norm, A_norm, ..., sigma_eps_norm (A_norm uses (rho, sigma_eps)-dependent bounds)
+        self.model = RBCNet(8, [256, 128, 64, 32], 1, output_bias=init_bias).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=5e-4)
 
         # Hermite-Gauss quadrature for E[·] in Euler equation
@@ -133,45 +163,157 @@ class RBCSolver:
     def denormalize(self, x, x_low, x_high):
         return x * (x_high - x_low) + x_low
 
+    def _A_bounds_tensors(self, rho: torch.Tensor, sigma_eps: torch.Tensor):
+        """Symmetric A bounds from unconditional log-TFP scale: Var(log A) = sigma_eps^2/(1-rho^2)."""
+        n = self.p.A_sigma_mult
+        one_m = torch.clamp(1.0 - rho * rho, min=1e-4)
+        sigma_stat = sigma_eps / torch.sqrt(one_m)
+        w = n * sigma_stat
+        A_low = torch.exp(-w)
+        A_high = torch.exp(w)
+        A_high = torch.maximum(A_high, A_low + 1e-6)
+        return A_low, A_high
+
+    def _A_bounds_numpy(self, rho: float, sigma_eps: float) -> tuple[float, float]:
+        return a_support_from_shock_params(rho, sigma_eps, self.p.A_sigma_mult, self.A_ss)
+
+    def _sample_params_numpy(self, rng: np.random.Generator) -> Params:
+        """Draw one parameter set uniformly from training bounds."""
+        p = self.p
+        return Params(
+            alpha=float(rng.uniform(*p.alpha_bounds)),
+            beta=float(rng.uniform(*p.beta_bounds)),
+            delta=float(rng.uniform(*p.delta_bounds)),
+            gamma=float(rng.uniform(*p.gamma_bounds)),
+            rho=float(rng.uniform(*p.rho_bounds)),
+            sigma_eps=float(rng.uniform(*p.sigma_eps_bounds)),
+            k_bounds=p.k_bounds,
+            A_bounds=p.A_bounds,
+            A_sigma_mult=p.A_sigma_mult,
+            alpha_bounds=p.alpha_bounds,
+            beta_bounds=p.beta_bounds,
+            delta_bounds=p.delta_bounds,
+            rho_bounds=p.rho_bounds,
+            gamma_bounds=p.gamma_bounds,
+            sigma_eps_bounds=p.sigma_eps_bounds,
+        )
+
+    @staticmethod
+    def _gap_metrics(nn_results: dict, ti_results: dict) -> dict:
+        keys = ("consumption", "capital", "output", "investment")
+        by_var = {}
+        nrmse_values = []
+        level_ratio_values = {}
+        for k in keys:
+            nn = np.asarray(nn_results[k])
+            ti = np.asarray(ti_results[k])
+            rmse = float(np.sqrt(np.mean((nn - ti) ** 2)))
+            nrmse = rmse / float(np.std(ti) + 1e-10)
+            lvl_ratio = float((np.mean(nn) + 1e-10) / (np.mean(ti) + 1e-10))
+            by_var[k] = {"rmse": rmse, "nrmse": nrmse, "level_ratio": lvl_ratio}
+            nrmse_values.append(nrmse)
+            level_ratio_values[k] = lvl_ratio
+        by_var["aggregate"] = {
+            "mean_nrmse": float(np.mean(nrmse_values)),
+            "max_nrmse": float(np.max(nrmse_values)),
+        }
+        by_var["level_ratio"] = level_ratio_values
+        return by_var
+
+    def _build_validation_panel(self, n_cases: int, seed: int):
+        """
+        Build a fixed validation panel. TI policies are solved once and reused,
+        so diagnostics remain deterministic and cheap at each evaluation.
+        """
+        if n_cases <= 0:
+            return []
+        from rbc_TimeIter import RBCTISolver
+
+        rng = np.random.default_rng(seed)
+        panel = []
+        for i in range(n_cases):
+            p_i = self._sample_params_numpy(rng)
+            ti_solver = RBCTISolver(p_i)
+            ti_policy = ti_solver.solve()
+            panel.append({"params": p_i, "ti_solver": ti_solver, "ti_policy": ti_policy, "seed": seed + i})
+        return panel
+
+    def _evaluate_validation_panel(self, panel, T: int) -> dict:
+        if not panel:
+            return {}
+        metrics_list = []
+        prev_mode = self.model.training
+        self.model.eval()
+        for item in panel:
+            p_i = item["params"]
+            ti_solver = item["ti_solver"]
+            ti_policy = item["ti_policy"]
+            seed = item["seed"]
+            np.random.seed(seed)
+            nn_res = self.simulate(
+                T=T,
+                alpha=p_i.alpha,
+                beta=p_i.beta,
+                delta=p_i.delta,
+                rho=p_i.rho,
+                gamma=p_i.gamma,
+                sigma_eps=p_i.sigma_eps,
+            )
+            np.random.seed(seed)
+            ti_res = ti_solver.simulate(ti_policy, T=T)
+            metrics_list.append(self._gap_metrics(nn_res, ti_res))
+        if prev_mode:
+            self.model.train()
+
+        keys = ("consumption", "capital", "output", "investment")
+        avg = {"aggregate": {}, "level_ratio": {}}
+        for k in keys:
+            avg[k] = {
+                "rmse": float(np.mean([m[k]["rmse"] for m in metrics_list])),
+                "nrmse": float(np.mean([m[k]["nrmse"] for m in metrics_list])),
+                "level_ratio": float(np.mean([m[k]["level_ratio"] for m in metrics_list])),
+            }
+            avg["level_ratio"][k] = avg[k]["level_ratio"]
+        avg["aggregate"] = {
+            "mean_nrmse": float(np.mean([m["aggregate"]["mean_nrmse"] for m in metrics_list])),
+            "max_nrmse": float(np.max([m["aggregate"]["max_nrmse"] for m in metrics_list])),
+        }
+        return avg
+
     def sample_batch(self, batch_size: int):
         """
-        Sample (k, A, alpha, beta, delta, rho, gamma) over the full parameter range.
-        k is normalized in [0,1] and will be interpreted as fraction of steady-state
-        capital in compute_residuals (per-sample k_ss). A and structural params
-        are normalized to [0,1] within their bounds.
+        Sample (k, A_norm, alpha, beta, delta, rho, gamma, sigma_eps_norm) over the full range.
+        A_norm is uniform on [0,1]; level A = A_low + A_norm*(A_high-A_low) with
+        A_low, A_high from (rho, sigma_eps).
         """
         p = self.p
 
-        # States: k and A (k in [0,1] → fraction of SS; A will be scaled in residuals)
         k_batch = torch.rand(batch_size, device=self.device)
         alpha_batch = torch.rand(batch_size, device=self.device)
         beta_batch = torch.rand(batch_size, device=self.device)
         delta_batch = torch.rand(batch_size, device=self.device)
         rho_batch = torch.rand(batch_size, device=self.device)
         gamma_batch = torch.rand(batch_size, device=self.device)
+        sigma_eps_batch = torch.rand(batch_size, device=self.device)
 
-        # A: lognormal with persistence-dependent variance
         rho_val = self.denormalize(rho_batch, p.rho_bounds[0], p.rho_bounds[1])
-        sigma_stat = p.sigma_eps / torch.sqrt(1.0 - rho_val**2)
-        A = torch.exp(sigma_stat * torch.randn(batch_size, device=self.device))
-        A_batch = self.normalize(A, p.A_bounds[0], p.A_bounds[1])
+        sigma_eps_val = self.denormalize(sigma_eps_batch, p.sigma_eps_bounds[0], p.sigma_eps_bounds[1])
+        A_low, A_high = self._A_bounds_tensors(rho_val, sigma_eps_val)
+        A_norm_batch = torch.rand(batch_size, device=self.device)
 
-        # Order: k, A, alpha, beta, delta, rho, gamma
+        # Order: k, A_norm, alpha, beta, delta, rho, gamma, sigma_eps
         inputs = torch.stack(
-            [k_batch, A_batch, alpha_batch, beta_batch, delta_batch, rho_batch, gamma_batch],
+            [k_batch, A_norm_batch, alpha_batch, beta_batch, delta_batch, rho_batch, gamma_batch, sigma_eps_batch],
             dim=1,
         )
         return inputs
 
     def compute_residuals(self, inputs: torch.Tensor):
         """
-        Euler residuals over a batch. Parameters (alpha, beta, delta, rho, gamma)
-        vary per sample; k is scaled by per-sample steady-state capital so the
-        NN sees a consistent state space across the parameter range.
+        Euler residuals over a batch. A uses (rho, sigma_eps)-dependent A_low, A_high for denormalization.
         """
         p = self.p
 
-        # Unpack normalized inputs (7 dims)
         k_norm = inputs[:, 0]
         A_norm = inputs[:, 1]
         alpha_norm = inputs[:, 2]
@@ -179,20 +321,22 @@ class RBCSolver:
         delta_norm = inputs[:, 4]
         rho_norm = inputs[:, 5]
         gamma_norm = inputs[:, 6]
+        sigma_eps_norm = inputs[:, 7]
 
-        # Denormalize structural parameters (vary per sample)
         alpha = self.denormalize(alpha_norm, p.alpha_bounds[0], p.alpha_bounds[1])
         beta = self.denormalize(beta_norm, p.beta_bounds[0], p.beta_bounds[1])
         delta = self.denormalize(delta_norm, p.delta_bounds[0], p.delta_bounds[1])
         rho = self.denormalize(rho_norm, p.rho_bounds[0], p.rho_bounds[1])
         gamma = self.denormalize(gamma_norm, p.gamma_bounds[0], p.gamma_bounds[1])
+        sigma_eps = self.denormalize(sigma_eps_norm, p.sigma_eps_bounds[0], p.sigma_eps_bounds[1])
 
-        # Per-sample steady-state capital so k has consistent meaning across params
+        A_low, A_high = self._A_bounds_tensors(rho, sigma_eps)
+
         k_ss_batch = self._steady_state_batch(alpha, beta, delta)
         k_low = p.k_bounds[0] * k_ss_batch
         k_high = p.k_bounds[1] * k_ss_batch
         k = self.denormalize(k_norm, k_low, k_high)
-        A = self.denormalize(A_norm, p.A_bounds[0], p.A_bounds[1])
+        A = self.denormalize(A_norm, A_low, A_high)
 
         # Policy: fraction of resources consumed
         frac = self.model(inputs).squeeze()
@@ -212,9 +356,10 @@ class RBCSolver:
         for i in range(self.n_quad):
             eps = self.z_nodes[i]
             weight = self.z_weights[i]
-            log_A_next = rho * torch.log(A.clamp(min=1e-8)) + p.sigma_eps * eps
-            A_next = torch.exp(log_A_next).clamp(p.A_bounds[0], p.A_bounds[1])
-            A_next_norm = self.normalize(A_next, p.A_bounds[0], p.A_bounds[1])
+            log_A_next = rho * torch.log(A.clamp(min=1e-8)) + sigma_eps * eps
+            A_next = torch.exp(log_A_next)
+            A_next = torch.clamp(A_next, A_low, A_high)
+            A_next_norm = self.normalize(A_next, A_low, A_high)
 
             inputs_next = torch.stack([
                 k_next_norm,
@@ -224,6 +369,7 @@ class RBCSolver:
                 delta_norm,
                 rho_norm,
                 gamma_norm,
+                sigma_eps_norm,
             ], dim=1)
 
             frac_next = self.model(inputs_next).squeeze()
@@ -237,10 +383,35 @@ class RBCSolver:
 
         return expected_rhs - mu
 
-    def train(self, batch_size: int = 2048, epochs: int = 10000):
-        """Train on random (k, A, alpha, beta, delta, rho, gamma) so the NN learns the RBC model over the full parameter space."""
+    def train(
+        self,
+        batch_size: int = 2048,
+        epochs: int = 10000,
+        eval_every: int = 200,
+        val_batch_size: int = 8192,
+        patience: int = 20,
+        min_rel_improve: float = 5e-3,
+        panel_n_cases: int = 4,
+        panel_T: int = 120,
+        panel_seed: int = 321,
+        best_checkpoint_path: str | None = None,
+    ):
+        """
+        Train with early stopping on a fixed validation residual set.
+        Also reports fixed-panel NN-vs-TI diagnostics (NRMSE and level ratios).
+        """
         self.model.train()
         losses = []
+        with torch.no_grad():
+            val_inputs = self.sample_batch(val_batch_size).detach()
+        validation_panel = self._build_validation_panel(panel_n_cases, panel_seed)
+        if validation_panel:
+            logger.info("Validation panel: %d fixed parameter cases (T=%d)", panel_n_cases, panel_T)
+
+        best_val_loss = np.inf
+        best_epoch = 0
+        bad_evals = 0
+        best_state_dict = None
         logger.info(f"Training over wide parameter range on {self.device}...")
         for epoch in range(1, epochs + 1):
             self.optimizer.zero_grad()
@@ -255,8 +426,62 @@ class RBCSolver:
             
             losses.append(loss.item())
             
-            if epoch % 100 == 0:
-                logger.info(f"Epoch {epoch}, MSE: {loss.item():.3e}")
+            if epoch % eval_every == 0:
+                with torch.no_grad():
+                    prev_mode = self.model.training
+                    self.model.eval()
+                    val_res = self.compute_residuals(val_inputs)
+                    val_loss = float(torch.mean(val_res ** 2).item())
+                    if prev_mode:
+                        self.model.train()
+
+                panel_metrics = self._evaluate_validation_panel(validation_panel, panel_T)
+                panel_msg = ""
+                if panel_metrics:
+                    lr = panel_metrics["level_ratio"]
+                    panel_msg = (
+                        " | panel mean_nrmse={:.3f}, max_nrmse={:.3f},"
+                        " level_ratio[c,k,y,i]=[{:.3f},{:.3f},{:.3f},{:.3f}]"
+                    ).format(
+                        panel_metrics["aggregate"]["mean_nrmse"],
+                        panel_metrics["aggregate"]["max_nrmse"],
+                        lr["consumption"],
+                        lr["capital"],
+                        lr["output"],
+                        lr["investment"],
+                    )
+                logger.info(
+                    "Epoch %d | train_mse=%.3e | val_mse=%.3e%s",
+                    epoch,
+                    loss.item(),
+                    val_loss,
+                    panel_msg,
+                )
+
+                rel_improve = (best_val_loss - val_loss) / max(abs(best_val_loss), 1e-12)
+                if val_loss < best_val_loss and (np.isinf(best_val_loss) or rel_improve >= min_rel_improve):
+                    best_val_loss = val_loss
+                    best_epoch = epoch
+                    bad_evals = 0
+                    best_state_dict = {k: v.detach().clone() for k, v in self.model.state_dict().items()}
+                    if best_checkpoint_path is not None:
+                        self.save(best_checkpoint_path)
+                else:
+                    bad_evals += 1
+                    if bad_evals >= patience:
+                        logger.info(
+                            "Early stopping at epoch %d (best val_mse=%.3e at epoch %d).",
+                            epoch,
+                            best_val_loss,
+                            best_epoch,
+                        )
+                        break
+
+        if best_state_dict is not None:
+            self.model.load_state_dict(best_state_dict)
+            logger.info("Restored best model from epoch %d (val_mse=%.3e).", best_epoch, best_val_loss)
+        else:
+            logger.warning("No best validation checkpoint captured; keeping last-epoch weights.")
                 
         return losses
 
@@ -303,19 +528,21 @@ class RBCSolver:
 
         k_low = p.k_bounds[0] * k_ss_sim
         k_high = p.k_bounds[1] * k_ss_sim
+        A_low, A_high = self._A_bounds_numpy(rho, sigma_eps)
         k_norm = lambda k: self.normalize(torch.tensor(k, dtype=torch.float32), k_low, k_high)
-        A_norm = lambda A: self.normalize(torch.tensor(A, dtype=torch.float32), p.A_bounds[0], p.A_bounds[1])
+        A_norm = lambda A: self.normalize(torch.tensor(A, dtype=torch.float32), A_low, A_high)
         alpha_n = self.normalize(torch.tensor(alpha), p.alpha_bounds[0], p.alpha_bounds[1])
         beta_n = self.normalize(torch.tensor(beta), p.beta_bounds[0], p.beta_bounds[1])
         delta_n = self.normalize(torch.tensor(delta), p.delta_bounds[0], p.delta_bounds[1])
         rho_n = self.normalize(torch.tensor(rho), p.rho_bounds[0], p.rho_bounds[1])
         gamma_n = self.normalize(torch.tensor(gamma), p.gamma_bounds[0], p.gamma_bounds[1])
+        sigma_eps_n = self.normalize(torch.tensor(sigma_eps), p.sigma_eps_bounds[0], p.sigma_eps_bounds[1])
 
         with torch.no_grad():
             for t in range(T):
                 k, A = k_series[t], A_series[t]
                 state = torch.stack([
-                    k_norm(k), A_norm(A), alpha_n, beta_n, delta_n, rho_n, gamma_n,
+                    k_norm(k), A_norm(A), alpha_n, beta_n, delta_n, rho_n, gamma_n, sigma_eps_n,
                 ]).unsqueeze(0).to(self.device)
                 frac = self.model(state).item()
                 y = A * k ** alpha
@@ -359,33 +586,81 @@ class RBCSolver:
         return solver
 
 
-if __name__ == "__main__":
-    # Train one NN to approximate the RBC policy over the full parameter space
+def train_rbc_model(
+    batch_size: int = 2048,
+    epochs: int = 50000,
+    eval_every: int = 200,
+    val_batch_size: int = 8192,
+    patience: int = 20,
+    min_rel_improve: float = 5e-3,
+    panel_n_cases: int = 4,
+    panel_T: int = 120,
+    panel_seed: int = 321,
+):
+    """
+    Canonical training entrypoint for RBC NN.
+    Saves best/final checkpoint and training loss plot under full-rbc/.
+    """
+    out_dir = Path(__file__).resolve().parent
+    checkpoint_path = out_dir / "rbc_nn.pt"
+    loss_plot = out_dir / "learn_rbc_loss.png"
+
     device = get_device()
     logger.info("Using device: %s", device)
     params = Params()
     solver = RBCSolver(params, device=device)
-    losses = solver.train(batch_size=2048, epochs=50000)
+    losses = solver.train(
+        batch_size=batch_size,
+        epochs=epochs,
+        eval_every=eval_every,
+        val_batch_size=val_batch_size,
+        patience=patience,
+        min_rel_improve=min_rel_improve,
+        panel_n_cases=panel_n_cases,
+        panel_T=panel_T,
+        panel_seed=panel_seed,
+        best_checkpoint_path=str(checkpoint_path),
+    )
+    # Save final model (already restored-to-best by solver.train()).
+    solver.save(str(checkpoint_path))
+    logger.info("Saved trained checkpoint to %s", checkpoint_path)
 
-    # Simulate at default calibration
-    sim_default = solver.simulate(T=200)
-    logger.info("Simulation at default params done.")
-
-    # Simulate at a different calibration (to check generalization)
-    sim_alt = solver.simulate(T=200, alpha=0.33, beta=0.97, delta=0.08, rho=0.95, gamma=1.5)
-    logger.info("Simulation at alternate params done.")
-
-    # Optional: plot training loss (output in same folder as script)
-    out_dir = Path(__file__).resolve().parent
-    loss_plot = out_dir / "learn_rbc_loss.png"
     plt.figure(figsize=(6, 4))
     plt.semilogy(losses, alpha=0.8)
     plt.xlabel("Epoch")
-    plt.ylabel("MSE (Euler residual)")
-    plt.title("RBC NN training over wide parameter range")
+    plt.ylabel("Train MSE (Euler residual)")
+    plt.title("RBC NN training loss")
     plt.tight_layout()
     plt.savefig(loss_plot, dpi=150)
     plt.close()
     logger.info("Saved %s", loss_plot)
-    # Save checkpoint in full-rbc so compare_rbc.py (and future runs) can skip training
-    solver.save(str(out_dir / "rbc_nn.pt"))
+    return solver, losses
+
+
+def train_rbc_cli():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--batch-size", type=int, default=2048)
+    parser.add_argument("--epochs", type=int, default=50000)
+    parser.add_argument("--eval-every", type=int, default=200)
+    parser.add_argument("--val-batch-size", type=int, default=8192)
+    parser.add_argument("--patience", type=int, default=20)
+    parser.add_argument("--min-rel-improve", type=float, default=5e-3)
+    parser.add_argument("--panel-n-cases", type=int, default=4)
+    parser.add_argument("--panel-T", type=int, default=120)
+    parser.add_argument("--panel-seed", type=int, default=321)
+    args = parser.parse_args()
+    train_rbc_model(
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        eval_every=args.eval_every,
+        val_batch_size=args.val_batch_size,
+        patience=args.patience,
+        min_rel_improve=args.min_rel_improve,
+        panel_n_cases=args.panel_n_cases,
+        panel_T=args.panel_T,
+        panel_seed=args.panel_seed,
+    )
+
+
+if __name__ == "__main__":
+    train_rbc_cli()

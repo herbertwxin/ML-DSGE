@@ -1,12 +1,13 @@
 """
-Run simulations and compare RBC policy from the trained neural network (learn_rbc)
-vs Time Iteration (rbc_TimeIter). Loads a saved NN checkpoint if present; otherwise
-trains and saves it so future runs skip training.
+Run simulations and compare RBC policy from a pre-trained neural network (learn_rbc)
+vs Time Iteration (rbc_TimeIter).
 """
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
+import json
 from pathlib import Path
+from dataclasses import asdict
 
 from learn_rbc import Params, RBCSolver, get_device
 from rbc_TimeIter import RBCTISolver
@@ -20,6 +21,7 @@ CHECKPOINT_PATH = FULL_RBC_DIR / "rbc_nn.pt"
 # Simulation length and seed (same for NN and TI)
 T_SIM = 200
 SIM_SEED = 123
+SERIES_KEYS = ("consumption", "capital", "output", "investment", "productivity")
 
 
 def get_calibration_params():
@@ -27,44 +29,82 @@ def get_calibration_params():
     Parameter set used for comparison (TI solve + both simulations).
     Edit this to use a different calibration; must lie within the bounds
     used when training the NN (see learn_rbc.Params alpha_bounds, etc.).
+
+    Bounds for STRUCTURAL PARAMETERS (NN learns over this whole space)
+    alpha_bounds: tuple = (0.20, 0.45)   # capital share
+    beta_bounds: tuple = (0.90, 0.99)    # discount factor
+    delta_bounds: tuple = (0.02, 0.15)   # depreciation rate
+    rho_bounds: tuple = (0.85, 0.99)      # persistence of productivity
+    gamma_bounds: tuple = (0.5, 4.0)     # risk aversion
     """
     return Params(
         alpha=0.30,
-        beta=0.95,
-        delta=0.20,
-        gamma=2.0,
-        rho=0.70,
+        beta=0.98,
+        delta=0.08,
+        rho=0.88,
+        gamma=3.0,
         sigma_eps=0.02,
     )
 
 
-def get_nn_solver(train_if_missing: bool = True, device: str = None):
+def get_nn_solver(train_if_missing: bool = False, device: str = None):
     """
-    Return an RBCSolver with trained weights. Load from checkpoint if it exists;
-    otherwise train and save, then return. Checkpoint is read from full-rbc folder.
+    Return an RBCSolver with trained weights loaded from checkpoint.
+    Training is intentionally detached to learn_rbc.py.
     """
     if device is None:
         device = get_device()
     path = CHECKPOINT_PATH
     if path.exists():
         return RBCSolver.load(str(path), device=device)
-    if not train_if_missing:
-        raise FileNotFoundError(
-            f"No checkpoint at {path}. Run learn_rbc.py once to train and save, or set train_if_missing=True."
-        )
-    logger.info("No checkpoint found; training NN...")
-    params = Params()
-    solver = RBCSolver(params, device=device)
-    solver.train(batch_size=2048, epochs=50000)
-    solver.save(CHECKPOINT_PATH)
-    return solver
+    raise FileNotFoundError(
+        f"No checkpoint at {path}. Run learn_rbc.py first to train and save the NN checkpoint."
+    )
+
+
+def _path_in_full_rbc(path_like: str) -> Path:
+    path = Path(path_like)
+    return path if path.is_absolute() else (FULL_RBC_DIR / path)
+
+
+def _compute_gap_metrics(nn_results: dict, ti_results: dict) -> dict:
+    metrics = {}
+    rmses = []
+    for key in SERIES_KEYS:
+        diff = np.asarray(nn_results[key]) - np.asarray(ti_results[key])
+        rmse = float(np.sqrt(np.mean(diff ** 2)))
+        max_abs = float(np.max(np.abs(diff)))
+        ti_scale = float(np.std(ti_results[key]) + 1e-10)
+        nrmse = rmse / ti_scale
+        metrics[key] = {"rmse": rmse, "max_abs": max_abs, "nrmse_vs_ti_std": nrmse}
+        rmses.append(nrmse)
+    metrics["aggregate"] = {"mean_nrmse": float(np.mean(rmses)), "max_nrmse": float(np.max(rmses))}
+    return metrics
+
+
+def _save_path_table(nn_results: dict, ti_results: dict, output_csv: Path) -> None:
+    t = np.arange(len(nn_results["consumption"]))
+    cols = [t]
+    names = ["t"]
+    for key in SERIES_KEYS:
+        nn = np.asarray(nn_results[key])
+        ti = np.asarray(ti_results[key])
+        cols.extend([nn, ti, nn - ti])
+        names.extend([f"{key}_nn", f"{key}_ti", f"{key}_diff"])
+    table = np.column_stack(cols)
+    header = ",".join(names)
+    np.savetxt(output_csv, table, delimiter=",", header=header, comments="")
+    logger.info("Saved NN/TI paths to %s", output_csv)
 
 
 def run_comparison(
     params=None,
-    train_if_missing: bool = True,
+    train_if_missing: bool = False,
     device: str = None,
     save_plot: str = "rbc_comparison.png",
+    save_paths: bool = True,
+    save_paths_file: str = "rbc_paths.csv",
+    save_metrics_file: str = "rbc_metrics.json",
 ):
     """
     Run NN and TI at the same calibration, same shock seed, and plot.
@@ -73,7 +113,7 @@ def run_comparison(
     """
     if params is None:
         params = get_calibration_params()
-    # ----- NN: load or train (weights only; calibration is applied at simulate time) -----
+    # ----- NN: load trained checkpoint (calibration is applied at simulate time) -----
     nn_solver = get_nn_solver(train_if_missing=train_if_missing, device=device)
     # ----- TI: solve at same params -----
     ti_solver = RBCTISolver(params)
@@ -129,6 +169,13 @@ def run_comparison(
     plt.savefig(plot_path, dpi=150)
     plt.close()
     logger.info("Saved comparison plot to %s", plot_path)
+    if save_paths:
+        paths_file = _path_in_full_rbc(save_paths_file)
+        metrics_file = _path_in_full_rbc(save_metrics_file)
+        _save_path_table(nn_results, ti_results, paths_file)
+        metrics = {"params": asdict(params), "metrics": _compute_gap_metrics(nn_results, ti_results)}
+        metrics_file.write_text(json.dumps(metrics, indent=2))
+        logger.info("Saved NN/TI gap metrics to %s", metrics_file)
     return nn_results, ti_results
 
 
@@ -137,6 +184,6 @@ if __name__ == "__main__":
     #   run_comparison(params=Params(alpha=0.33, beta=0.97, ...), ...)
     run_comparison(
         params=get_calibration_params(),
-        train_if_missing=True,
+        train_if_missing=False,
         save_plot=str(FULL_RBC_DIR / "rbc_comparison.png"),
     )

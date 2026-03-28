@@ -36,7 +36,9 @@ ML-DSGE/
 ├── full-rbc/          # Full RBC model implementation
 │   ├── learn_rbc.py      # Neural network solver for RBC
 │   ├── rbc_TimeIter.py    # Traditional Time Iteration solver
-│   └── compare_rbc.py     # Comparison script (NN vs TI)
+│   ├── compare_rbc.py     # Comparison script (NN vs TI)
+│   ├── diagnose_divergence.py  # Automated parameter-sweep diagnostics (NN vs TI)
+│   └── simulation/        # Generated divergence outputs (plots, CSV, JSON)
 ├── poc/               # Proof-of-concept implementations
 │   └── neural_net.py      # Early neural network experiments
 ├── lstm/              # LSTM-based approaches (exploratory)
@@ -54,10 +56,18 @@ The RBC model features:
 
 ### Neural Network Architecture
 
-- **Inputs**: Normalized (k, A, α, β, δ, ρ, γ) — 7 dimensions
+- **Inputs**: Normalized (k, A, α, β, δ, ρ, γ, σ_ε) — 8 dimensions
 - **Output**: Consumption fraction (sigmoid → [0,1])
 - **Architecture**: Feedforward network with ELU activations
 - **Training**: Adam optimizer minimizing Euler equation residuals
+
+### State Scaling and Comparability
+
+- **Dynamic productivity scaling**: A is normalized with parameter-dependent bounds from the stationary scale of log TFP,
+  $$\sigma_{\text{stat}} = \frac{\sigma_\varepsilon}{\sqrt{1-\rho^2}}, \quad
+  A \in [\exp(-n\sigma_{\text{stat}}), \exp(n\sigma_{\text{stat}})]$$
+  where `n = A_sigma_mult`.
+- **TI alignment**: `rbc_TimeIter.py` uses the same productivity support rule for the spline grid at a given calibration, improving NN/TI comparability.
 
 ### Usage
 
@@ -71,23 +81,41 @@ The RBC model features:
    ```bash
    python full-rbc/compare_rbc.py
    ```
-   This loads the trained NN (or trains if missing), solves via TI, runs simulations with the same seed, and generates comparison plots.
+   This loads the trained NN checkpoint (pre-trained via `learn_rbc.py`), solves via TI, runs simulations with the same seed, and generates comparison plots.
+   It also saves:
+   - `full-rbc/rbc_paths.csv` (full NN/TI time paths for all variables + differences)
+   - `full-rbc/rbc_metrics.json` (RMSE/NRMSE summary by variable)
 
 3. **Specify calibration**: Edit `get_calibration_params()` in `compare_rbc.py` to change the parameter set used for comparison.
+
+4. **Run automated divergence diagnostics**:
+   ```bash
+   python full-rbc/diagnose_divergence.py --n-cases 40 --top-k 5 --T 200 --n-workers 8
+   ```
+   This runs random parameter sweeps (parallel), ranks divergence cases, and writes outputs to `full-rbc/simulation/`:
+   - `divergence_summary.csv`
+   - `divergence_top_cases.json`
+   - `divergence_case_XXX_paths.csv`
+   - `divergence_case_XXX_plot.png` (same subplot style as `rbc_comparison`, with parameter box in bottom-right panel)
 
 ## Technical Details
 
 ### Training Process
 
-- **Sampling**: Random batches of (k, A, α, β, δ, ρ, γ) are sampled uniformly within specified bounds.
+- **Sampling**: Random batches of (k, A, α, β, δ, ρ, γ, σ_ε) are sampled within specified bounds.
 - **Residual Computation**: For each sample, the Euler equation residual is computed using Hermite-Gauss quadrature for expectations.
 - **Steady State**: Per-sample steady-state capital is computed to maintain consistent state-space scaling across parameters.
+- **Validation set**: A fixed validation batch of Euler residual points is created once and evaluated periodically.
+- **Early stopping**: Training stops when validation MSE fails to improve by a minimum relative amount for a specified patience window.
+- **Best model restore**: The best validation checkpoint is restored at the end of training.
+- **Panel diagnostics**: During training, a fixed validation panel compares NN and TI time paths and logs NRMSE plus level ratios for (c, k, y, i).
 
 ### Validation
 
 - **Euler Residuals**: Training loss measures how well the network satisfies equilibrium conditions.
 - **Simulation Comparison**: Side-by-side comparison with Time Iteration at the same calibration and shock sequence.
 - **Parameter Generalization**: Test the network at parameter values not seen during training.
+- **Divergence localization**: Automated diagnostics report where NN/TI differences are largest and whether states leave intended support regions.
 
 ## Future Directions
 
