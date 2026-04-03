@@ -46,7 +46,7 @@ class Params:
     sigma_eps: float = 0.02  # std dev of shock innovation (fixed in training)
 
     # Bounds for state space: k as fraction of steady-state capital
-    k_bounds: tuple = (0.5, 1.5)   # k as fraction of steady-state capital
+    k_bounds: tuple = (0.4, 1.6)   # k as fraction of steady-state capital
     # A_bounds: tuple = (0.5, 1.5)
 
     # How wide the NN's A normalization box is: log A in [-n, +n] * sigma_stat, sigma_stat = sigma_eps/sqrt(1-rho^2)
@@ -133,7 +133,7 @@ class RBCSolver:
         logger.info(f"Output bias init: {init_bias:.3f} (SS frac: {frac_ss_init:.3f})")
 
         # 8 inputs: k_norm, A_norm, ..., sigma_eps_norm (A_norm uses (rho, sigma_eps)-dependent bounds)
-        self.model = RBCNet(8, [512, 256, 128, 64, 32, 16], 1, output_bias=init_bias).to(self.device)
+        self.model = RBCNet(8, [64, 64, 64, 64], 1, output_bias=init_bias).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=5e-4)
 
         # Hermite-Gauss quadrature for E[·] in Euler equation
