@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 
 from compare_rbc import FULL_RBC_DIR, CHECKPOINT_PATH, get_nn_solver
 from learn_rbc import Params, a_support_from_shock_params, train_rbc_model
@@ -38,7 +39,6 @@ def sample_params(rng: np.random.Generator, base: Params) -> Params:
         rho=float(rng.uniform(*base.rho_bounds)),
         sigma_eps=float(rng.uniform(*base.sigma_eps_bounds)),
         k_bounds=base.k_bounds,
-        A_bounds=base.A_bounds,
         A_sigma_mult=base.A_sigma_mult,
         alpha_bounds=base.alpha_bounds,
         beta_bounds=base.beta_bounds,
@@ -160,7 +160,9 @@ def run_case(nn_solver, params: Params, T: int, seed: int) -> tuple[dict, dict, 
     metrics, score = compute_gap_metrics(nn_results, ti_results)
 
     # Diagnostics to localize likely failure modes
-    k_ss_sim, _, _, _ = nn_solver._steady_state(params.alpha, params.beta, params.delta)
+    k_ss_sim = nn_solver._steady_state_batch(
+        torch.tensor(params.alpha), torch.tensor(params.beta), torch.tensor(params.delta)
+    )[0].item()
     nn_k_low = params.k_bounds[0] * k_ss_sim
     nn_k_high = params.k_bounds[1] * k_ss_sim
     nn_k = np.asarray(nn_results["capital"])

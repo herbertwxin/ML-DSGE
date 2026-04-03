@@ -8,7 +8,7 @@ import logging
 from scipy.interpolate import RectBivariateSpline
 
 # Use Params from learn_rbc so TI and NN share the same calibration and A support
-from learn_rbc import Params, productivity_grid_bounds
+from learn_rbc import Params, a_support_from_shock_params
 
 # Set random seeds for reproducibility
 np.random.seed(42)
@@ -32,7 +32,7 @@ class RBCTISolver:
         self.k_min = self.p.k_bounds[0] * self.k_ss
         self.k_max = self.p.k_bounds[1] * self.k_ss
         # Same A interval as NN normalization: exp(± n σ_stat) around A_ss, σ_stat = σ_ε / sqrt(1-ρ²)
-        self.A_min, self.A_max = productivity_grid_bounds(self.p, self.A_ss)
+        self.A_min, self.A_max = a_support_from_shock_params(self.p.rho, self.p.sigma_eps, self.p.A_sigma_mult, self.A_ss)
         logger.info("TI productivity grid [A_min, A_max] = [%.5f, %.5f] (aligned with NN A support)", self.A_min, self.A_max)
 
         self.k_nodes = np.linspace(self.k_min, self.k_max, self.n_k)

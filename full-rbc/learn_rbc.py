@@ -47,8 +47,7 @@ class Params:
 
     # Bounds for state space: k as fraction of steady-state capital
     k_bounds: tuple = (0.5, 1.5)   # k as fraction of steady-state capital
-    # Legacy fixed productivity box (only if you revert TI to fixed grid); default TI uses productivity_grid_bounds()
-    A_bounds: tuple = (0.5, 1.5)
+    # A_bounds: tuple = (0.5, 1.5)
 
     # How wide the NN's A normalization box is: log A in [-n, +n] * sigma_stat, sigma_stat = sigma_eps/sqrt(1-rho^2)
     A_sigma_mult: float = 3.0
@@ -85,15 +84,10 @@ def a_support_from_shock_params(
     return a_low, max(a_high, a_low + 1e-6)
 
 
-def productivity_grid_bounds(params: Params, a_ss: float = 1.0) -> tuple[float, float]:
-    """Spline grid limits at calibration; matches NN A_norm denominator at (params.rho, params.sigma_eps)."""
-    return a_support_from_shock_params(params.rho, params.sigma_eps, params.A_sigma_mult, a_ss)
-
-
 class RBCNet(nn.Module):
     """Neural network approximating the policy (consumption fraction) for the RBC model.
     Inputs: (k_norm, A_norm, alpha_norm, beta_norm, delta_norm, rho_norm, gamma_norm, sigma_eps_norm).
-    A_norm is vs A_low,A_high from stationary log-TFP scale given (rho, sigma_eps).
+    A_norm is vs A_low, A_high from stationary log-TFP scale given (rho, sigma_eps).
     Output: fraction of current resources consumed (sigmoid → [0,1]).
     """
 
@@ -127,9 +121,9 @@ class RBCSolver:
         self.device = torch.device(device)
 
         # Reference steady state (at default params) for output-bias initialization only
-        self.k_ss, self.c_ss, self.y_ss, self.A_ss = self._steady_state(
-            self.p.alpha, self.p.beta, self.p.delta
-        )
+        _a = torch.tensor(self.p.alpha); _b = torch.tensor(self.p.beta); _d = torch.tensor(self.p.delta)
+        self.k_ss, self.c_ss, self.y_ss = (x.item() for x in self._steady_state_batch(_a, _b, _d))
+        self.A_ss = 1.0
         logger.info(f"Reference steady-state capital (A=1): {self.k_ss:.3f}")
 
         # Initial bias so policy starts near steady-state consumption share
@@ -148,20 +142,13 @@ class RBCSolver:
         self.z_nodes = torch.tensor(nodes * np.sqrt(2), dtype=torch.float32, device=self.device)
         self.z_weights = torch.tensor(weights / np.sqrt(np.pi), dtype=torch.float32, device=self.device)
 
-    def _steady_state(self, alpha: float, beta: float, delta: float, A_ss: float = 1.0):
-        """Steady state for given (alpha, beta, delta), A=1."""
-        term = (1.0 / beta - (1.0 - delta)) / (alpha * A_ss)
-        k_ss = term ** (1.0 / (alpha - 1.0))
-        y_ss = A_ss * k_ss ** alpha
-        c_ss = y_ss - delta * k_ss
-        return k_ss, c_ss, y_ss, A_ss
-
     def _steady_state_batch(self, alpha: torch.Tensor, beta: torch.Tensor, delta: torch.Tensor):
-        """Vectorized steady-state capital for batches (for per-sample k bounds)."""
-        A_ss = 1.0
-        term = (1.0 / beta - (1.0 - delta)) / (alpha * A_ss)
+        """Vectorized steady state (A=1) for batches. Returns (k_ss, c_ss, y_ss)."""
+        term = (1.0 / beta - (1.0 - delta)) / alpha
         k_ss = term ** (1.0 / (alpha - 1.0))
-        return k_ss
+        y_ss = k_ss ** alpha
+        c_ss = y_ss - delta * k_ss
+        return k_ss, c_ss, y_ss
 
     def normalize(self, x, x_low, x_high):
         return (x - x_low) / (x_high - x_low)
@@ -194,7 +181,6 @@ class RBCSolver:
             rho=float(rng.uniform(*p.rho_bounds)),
             sigma_eps=float(rng.uniform(*p.sigma_eps_bounds)),
             k_bounds=p.k_bounds,
-            A_bounds=p.A_bounds,
             A_sigma_mult=p.A_sigma_mult,
             alpha_bounds=p.alpha_bounds,
             beta_bounds=p.beta_bounds,
@@ -305,70 +291,80 @@ class RBCSolver:
         }
         return avg
 
-    def sample_batch(self, batch_size: int):
+    def sample_batch(self, batch_size: int) -> dict:
         """
-        Sample (k, A_norm, alpha, beta, delta, rho, gamma, sigma_eps_norm) over the full range.
-        A_norm is uniform on [0,1]; level A = A_low + A_norm*(A_high-A_low) with
-        A_low, A_high from (rho, sigma_eps).
+        Sample a batch of states and structural parameters.
+        Returns a dict with normalized NN inputs, physical states (k, A),
+        physical structural params, and state bounds (k_low, k_high, A_low, A_high).
         """
         p = self.p
 
-        k_batch = torch.rand(batch_size, device=self.device)
-        alpha_batch = torch.rand(batch_size, device=self.device)
-        beta_batch = torch.rand(batch_size, device=self.device)
-        delta_batch = torch.rand(batch_size, device=self.device)
-        rho_batch = torch.rand(batch_size, device=self.device)
-        gamma_batch = torch.rand(batch_size, device=self.device)
-        sigma_eps_batch = torch.rand(batch_size, device=self.device)
+        k_norm         = torch.rand(batch_size, device=self.device)
+        alpha_norm     = torch.rand(batch_size, device=self.device)
+        beta_norm      = torch.rand(batch_size, device=self.device)
+        delta_norm     = torch.rand(batch_size, device=self.device)
+        rho_norm       = torch.rand(batch_size, device=self.device)
+        gamma_norm     = torch.rand(batch_size, device=self.device)
+        sigma_eps_norm = torch.rand(batch_size, device=self.device)
 
         # Oversample hard region: high beta and low delta.
         if p.hard_region_prob > 0.0:
             hard_mask = torch.rand(batch_size, device=self.device) < p.hard_region_prob
             n_hard = int(hard_mask.sum().item())
             if n_hard > 0:
-                beta_batch[hard_mask] = p.hard_beta_low_norm + (1.0 - p.hard_beta_low_norm) * torch.rand(
+                beta_norm[hard_mask] = p.hard_beta_low_norm + (1.0 - p.hard_beta_low_norm) * torch.rand(
                     n_hard, device=self.device
                 )
-                delta_batch[hard_mask] = p.hard_delta_high_norm * torch.rand(n_hard, device=self.device)
+                delta_norm[hard_mask] = p.hard_delta_high_norm * torch.rand(n_hard, device=self.device)
 
-        A_norm_batch = torch.rand(batch_size, device=self.device)
+        A_norm = torch.rand(batch_size, device=self.device)
 
-        # Order: k, A_norm, alpha, beta, delta, rho, gamma, sigma_eps
-        inputs = torch.stack(
-            [k_batch, A_norm_batch, alpha_batch, beta_batch, delta_batch, rho_batch, gamma_batch, sigma_eps_batch],
-            dim=1,
-        )
-        return inputs
-
-    def compute_residuals(self, inputs: torch.Tensor):
-        """
-        Euler residuals over a batch. A uses (rho, sigma_eps)-dependent A_low, A_high for denormalization.
-        """
-        p = self.p
-
-        k_norm = inputs[:, 0]
-        A_norm = inputs[:, 1]
-        alpha_norm = inputs[:, 2]
-        beta_norm = inputs[:, 3]
-        delta_norm = inputs[:, 4]
-        rho_norm = inputs[:, 5]
-        gamma_norm = inputs[:, 6]
-        sigma_eps_norm = inputs[:, 7]
-
-        alpha = self.denormalize(alpha_norm, p.alpha_bounds[0], p.alpha_bounds[1])
-        beta = self.denormalize(beta_norm, p.beta_bounds[0], p.beta_bounds[1])
-        delta = self.denormalize(delta_norm, p.delta_bounds[0], p.delta_bounds[1])
-        rho = self.denormalize(rho_norm, p.rho_bounds[0], p.rho_bounds[1])
-        gamma = self.denormalize(gamma_norm, p.gamma_bounds[0], p.gamma_bounds[1])
+        # Denormalize structural parameters
+        alpha     = self.denormalize(alpha_norm,     p.alpha_bounds[0],     p.alpha_bounds[1])
+        beta      = self.denormalize(beta_norm,      p.beta_bounds[0],      p.beta_bounds[1])
+        delta     = self.denormalize(delta_norm,     p.delta_bounds[0],     p.delta_bounds[1])
+        rho       = self.denormalize(rho_norm,       p.rho_bounds[0],       p.rho_bounds[1])
+        gamma     = self.denormalize(gamma_norm,     p.gamma_bounds[0],     p.gamma_bounds[1])
         sigma_eps = self.denormalize(sigma_eps_norm, p.sigma_eps_bounds[0], p.sigma_eps_bounds[1])
 
+        # Compute per-sample state bounds from structural parameters
         A_low, A_high = self._A_bounds_tensors(rho, sigma_eps)
+        k_ss, _, _    = self._steady_state_batch(alpha, beta, delta)
+        k_low  = p.k_bounds[0] * k_ss
+        k_high = p.k_bounds[1] * k_ss
 
-        k_ss_batch = self._steady_state_batch(alpha, beta, delta)
-        k_low = p.k_bounds[0] * k_ss_batch
-        k_high = p.k_bounds[1] * k_ss_batch
+        # Denormalize states to physical space
         k = self.denormalize(k_norm, k_low, k_high)
         A = self.denormalize(A_norm, A_low, A_high)
+
+        # Normalized NN inputs: (k_norm, A_norm, alpha_norm, beta_norm, delta_norm, rho_norm, gamma_norm, sigma_eps_norm)
+        inputs = torch.stack(
+            [k_norm, A_norm, alpha_norm, beta_norm, delta_norm, rho_norm, gamma_norm, sigma_eps_norm],
+            dim=1,
+        )
+        return dict(
+            inputs=inputs,
+            k=k, A=A,
+            k_low=k_low, k_high=k_high,
+            A_low=A_low, A_high=A_high,
+            alpha=alpha, beta=beta, delta=delta,
+            rho=rho, gamma=gamma, sigma_eps=sigma_eps,
+        )
+
+    def compute_residuals(self, batch: dict):
+        """Euler equation residuals for a batch produced by sample_batch."""
+        inputs    = batch["inputs"]
+        k         = batch["k"];         A         = batch["A"]
+        k_low     = batch["k_low"];     k_high    = batch["k_high"]
+        A_low     = batch["A_low"];     A_high    = batch["A_high"]
+        alpha     = batch["alpha"];     beta      = batch["beta"]
+        delta     = batch["delta"];     rho       = batch["rho"]
+        gamma     = batch["gamma"];     sigma_eps = batch["sigma_eps"]
+
+        # Normalized structural params (columns of inputs) — needed to build inputs_next for NN
+        alpha_norm     = inputs[:, 2]; beta_norm      = inputs[:, 3]
+        delta_norm     = inputs[:, 4]; rho_norm       = inputs[:, 5]
+        gamma_norm     = inputs[:, 6]; sigma_eps_norm = inputs[:, 7]
 
         # Policy: fraction of resources consumed
         frac = self.model(inputs).squeeze()
@@ -432,7 +428,7 @@ class RBCSolver:
         self.model.train()
         losses = []
         with torch.no_grad():
-            val_inputs = self.sample_batch(val_batch_size).detach()
+            val_batch = self.sample_batch(val_batch_size)
         validation_panel = self._build_validation_panel(panel_n_cases, panel_seed)
         if validation_panel:
             logger.info("Validation panel: %d fixed parameter cases (T=%d)", panel_n_cases, panel_T)
@@ -445,8 +441,8 @@ class RBCSolver:
         for epoch in range(1, epochs + 1):
             self.optimizer.zero_grad()
             
-            inputs = self.sample_batch(batch_size)
-            residuals = self.compute_residuals(inputs)
+            batch = self.sample_batch(batch_size)
+            residuals = self.compute_residuals(batch)
             
             loss = torch.mean(residuals ** 2)
             loss.backward()
@@ -459,7 +455,7 @@ class RBCSolver:
                 with torch.no_grad():
                     prev_mode = self.model.training
                     self.model.eval()
-                    val_res = self.compute_residuals(val_inputs)
+                    val_res = self.compute_residuals(val_batch)
                     val_loss = float(torch.mean(val_res ** 2).item())
                     if prev_mode:
                         self.model.train()
@@ -540,7 +536,8 @@ class RBCSolver:
         gamma = gamma if gamma is not None else p.gamma
         sigma_eps = sigma_eps if sigma_eps is not None else p.sigma_eps
 
-        k_ss_sim, c_ss_sim, y_ss_sim, _ = self._steady_state(alpha, beta, delta)
+        _a = torch.tensor(alpha, dtype=torch.float32); _b = torch.tensor(beta, dtype=torch.float32); _d = torch.tensor(delta, dtype=torch.float32)
+        k_ss_sim, c_ss_sim, y_ss_sim = (x.item() for x in self._steady_state_batch(_a, _b, _d))
         if k0 is None:
             k0 = k_ss_sim
         if A0 is None:
