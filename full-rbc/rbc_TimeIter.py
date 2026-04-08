@@ -171,6 +171,6 @@ if __name__ == "__main__":
     params = Params()
     ti_solver = RBCTISolver(params)
     policy_ti = ti_solver.solve()
-    np.random.seed(123)
+    np.random.seed(42)
     results = ti_solver.simulate(policy_ti, T=200)
     logger.info("TI simulation done. Use compare_rbc.py for NN vs TI comparison.")

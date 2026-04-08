@@ -43,10 +43,10 @@ class Params:
     delta: float = 0.1       # depreciation rate
     gamma: float = 2.0       # risk aversion
     rho: float = 0.90        # persistence of productivity shock
-    sigma_eps: float = 0.02  # std dev of shock innovation (fixed in training)
+    sigma_eps: float = 0.02  # std dev of shock innovation
 
     # Bounds for state space: k as fraction of steady-state capital
-    k_bounds: tuple = (0.4, 1.6)   # k as fraction of steady-state capital
+    k_bounds: tuple = (0.5, 1.5)   # k as fraction of steady-state capital
     # A_bounds: tuple = (0.5, 1.5)
 
     # How wide the NN's A normalization box is: log A in [-n, +n] * sigma_stat, sigma_stat = sigma_eps/sqrt(1-rho^2)
@@ -66,12 +66,7 @@ class Params:
     hard_delta_high_norm: float = 0.20 # delta_norm sampled from [0, hard_delta_high_norm]
 
 
-def a_support_from_shock_params(
-    rho: float,
-    sigma_eps: float,
-    a_sigma_mult: float,
-    a_ss: float = 1.0,
-) -> tuple[float, float]:
+def a_support_from_shock_params(rho: float, sigma_eps: float, a_sigma_mult: float, a_ss: float = 1.0) -> tuple[float, float]:
     """
     Physical productivity support [A_low, A_high] = exp(± n σ_stat) × A_ss,
     σ_stat = σ_ε / sqrt(1-ρ²). Same rule for NN state normalization and TI spline grid.
