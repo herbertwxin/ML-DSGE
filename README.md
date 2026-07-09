@@ -6,6 +6,10 @@ Current main implementation: a stochastic RBC model solved by:
 - a neural policy approximation (`full-rbc/learn_rbc.py`)
 - a Time Iteration benchmark (`full-rbc/rbc_TimeIter.py`)
 
+A Julia port lives in [`full-rbc-julia/`](full-rbc-julia/README.md), with the
+same model/diagnostics plus a fix (normalized Euler residual) for divergence
+patterns found via `full-rbc/diagnose_divergence.py`.
+
 ---
 
 ## Motivation
@@ -34,6 +38,10 @@ ML-DSGE/
 │   ├── rbc_comparison.png       # Comparison figure (generated)
 │   ├── rbc_paths.csv            # Time paths (generated)
 │   └── rbc_metrics.json         # Metrics summary (generated)
+├── full-rbc-julia/
+│   ├── src/                     # RBCParams, TISolver, NNSolver, diagnostics
+│   ├── scripts/                 # train.jl, compare.jl, diagnose_divergence.jl
+│   └── README.md                # Julia-specific docs incl. the normalization fix
 ├── poc/
 ├── lstm/
 └── README.md
