@@ -20,7 +20,7 @@ FULL_RBC_DIR = Path(__file__).resolve().parent
 CHECKPOINT_PATH = FULL_RBC_DIR / "rbc_nn.pt"
 # Simulation length and seed (same for NN and TI)
 T_SIM = 200
-SIM_SEED = 123
+SIM_SEED = 42
 SERIES_KEYS = ("consumption", "capital", "output", "investment", "productivity")
 
 

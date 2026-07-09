@@ -170,11 +170,12 @@ For reproducible experiments, change one mechanism at a time and compare `simula
 - `numpy`
 - `matplotlib`
 - `scipy`
+- `tqdm`
 
-Install example:
+All dependencies are pinned in `requirements.txt`. Install them into your environment (e.g. a conda env) with:
 
 ```bash
-python3 -m pip install torch numpy matplotlib scipy
+python3 -m pip install -r requirements.txt
 ```
 
 If `ModuleNotFoundError: No module named 'torch'` appears, install `torch` into the same interpreter used to run scripts:
