@@ -188,13 +188,14 @@ python3 -m pip install torch
 
 ## Roadmap
 
-- Extend the same workflow to richer DSGE settings (e.g., NK, heterogeneous agents).
-- Introduce rollout-aware training terms for long-horizon dynamic consistency.
-- Improve ranking diagnostics with blended scores (normalized + level + correlation).
-- Standardize experiment tracking across model/seed/config runs.
+- [ ] Check why divergence occur in full-rbc
+- [ ] [ ] Extend the same workflow to richer DSGE settings (e.g., NK, heterogeneous agents).
+- [ ] Introduce rollout-aware training terms for long-horizon dynamic consistency.
+- [ ] Improve ranking diagnostics with blended scores (normalized + level + correlation)
+- [ ] Standardize experiment tracking across model/seed/config runs.
 
 ---
 
 ## License
 
-Add your preferred license text here.
+MIT
