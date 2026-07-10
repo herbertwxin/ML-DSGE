@@ -1,201 +1,188 @@
-# Time Iteration (TI) benchmark using cubic splines.
-# Julia port of `rbc_TimeIter.py::RBCTISolver`, with one robustness fix on top
-# (see `TISolver`/`solve!` docs): the iterated/interpolated policy is a
-# *bounded consumption share* rather than a raw consumption level.
+# Time Iteration benchmark: Coleman operator with an exact per-node Euler solve.
+#
+# Earlier versions of this file (and the Python original, `rbc_TimeIter.py`)
+# used naive successive approximation: evaluate the Euler right-hand side at
+# the next-period capital implied by the *previous* policy, invert marginal
+# utility, and damp. That map is not a contraction — for calibrations near the
+# training-bound edges (high beta, low delta, high rho) it oscillated below
+# tolerance forever, and for volatile draws it collapsed to a spurious
+# `c ≈ 0` fixed point. See README "Fix applied: proper Coleman time iteration".
+#
+# The rewrite applies the textbook Coleman operator: at every grid node,
+# *solve* the Euler equation
+#
+#     u'(c) = beta * E[ u'(c'(k', A')) * R(k', A') ],   k' = resources - c
+#
+# for `c` with the future policy held fixed. The left side is strictly
+# decreasing in `c` and the right side strictly increasing (higher `c` means
+# lower `k'`, hence higher `R` and lower `c'`), so the gap function has a
+# unique root that bisection brackets by construction. Under standard
+# monotonicity/concavity conditions this operator is a contraction, so the
+# outer loop converges without damping.
 
 """
-    TISolver
+    TISolver(p::RBCParams; n_k=30, n_A=15, n_quad=7)
 
-Time-Iteration solver over a `(k, A)` grid, using cubic B-spline interpolation
-(Interpolations.jl) of the consumption **share** `frac ∈ (0,1)` — not the raw
-consumption level — with linear extrapolation outside the grid.
-
-### Why a share, not a level (fix vs. a literal port of `rbc_TimeIter.py`)
-
-The Python version iterates directly on the consumption *level* `c(k, A)`.
-That representation has an unstable degenerate fixed point: if `c` dips near
-zero anywhere the interpolant is evaluated (e.g. transient Runge-type
-oscillation of the cubic spline during early iterations, more likely for
-volatile/highly-persistent calibrations), `mu' = c'^(-gamma)` explodes at that
-point, which pulls the *whole* grid's `c_target = (beta*E[mu'*R'])^(-1/gamma)`
-toward zero on the next sweep — a self-reinforcing collapse to `c ≈ 0`
-everywhere, which is a spurious (economically nonsensical) fixed point of the
-undamped map. This was observed in practice: for some calibrations near the
-edges of the training bounds, `solve!` on a raw level would converge
-(`diff < tol`) to a policy grid of order `1e-6`–`1e-3` almost everywhere,
-instead of order `c_ss`.
-
-Iterating on the **share** `frac = c / resources` instead avoids this: `frac`
-is clamped to `(frac_floor, 1-frac_floor)` at every use (both when it's read
-back to reconstruct `c_prime` for the expectation, and when the new target is
-computed), so no single quadrature node's numerics can ever push the *whole*
-grid toward a degenerate corner. This is also exactly the representation the
-NN uses (a sigmoid-bounded share), so both solvers share the same numerical
-character, and it makes [`simulate`](@ref)'s boundary extrapolation simpler
-and safe by construction (see below).
+Grid, quadrature, and calibration for the Time-Iteration benchmark. The
+capital grid spans `p.k_bounds .* k_ss(A=1)`; the productivity grid spans the
+same `±A_sigma_mult * sigma_stat` box the NN normalizes on. Immutable — call
+[`solve`](@ref) to produce a [`TIPolicy`](@ref).
 """
-mutable struct TISolver
+struct TISolver{KR<:AbstractRange{Float64},AR<:AbstractRange{Float64}}
     p::RBCParams
-    k_ss::Float64
-    c_ss::Float64
-    y_ss::Float64
-    A_ss::Float64
-    n_k::Int
-    n_A::Int
+    k_nodes::KR
+    A_nodes::AR
+    quad::Quadrature
+end
+
+function TISolver(p::RBCParams; n_k::Int=30, n_A::Int=15, n_quad::Int=7)
+    k_min, k_max = k_support(p)
+    A_min, A_max = a_support_from_shock_params(p.rho, p.sigma_eps, p.A_sigma_mult)
+    return TISolver(p, range(k_min, k_max; length=n_k),
+                    range(A_min, A_max; length=n_A), Quadrature(n_quad))
+end
+
+"""
+    TIPolicy
+
+Converged consumption-share policy on the TI grid: a cubic B-spline
+interpolant of `frac = c / resources` plus solve metadata. Callable and
+usable with the shared [`simulate`](@ref) via [`consumption_share`](@ref).
+
+The interpolated object is a *share* in `(0, 1)`, not a consumption level:
+a share stays economically meaningful when the simulated state leaves the
+fitted grid (apply the boundary share to the true resources), whereas
+extrapolating a raw consumption level can violate the budget constraint and
+explode.
+"""
+struct TIPolicy{I}
+    p::RBCParams
+    itp::I
+    frac::Matrix{Float64}
     k_min::Float64
     k_max::Float64
     A_min::Float64
     A_max::Float64
-    k_nodes::AbstractRange{Float64}
-    A_nodes::AbstractRange{Float64}
-    frac_policy::Matrix{Float64}
-    z_nodes::Vector{Float64}
-    z_weights::Vector{Float64}
+    frac_floor::Float64
+    converged::Bool
+    iterations::Int
+    residual::Float64
 end
 
-function TISolver(p::RBCParams)
-    k_ss, c_ss, y_ss, A_ss = steady_state(p)
+"""
+    consumption_share(pol::TIPolicy, k, A) -> frac in (0, 1)
 
-    n_k, n_A = 30, 15
-    k_min = p.k_bounds[1] * k_ss
-    k_max = p.k_bounds[2] * k_ss
-    A_min, A_max = a_support_from_shock_params(p.rho, p.sigma_eps, p.A_sigma_mult, A_ss)
-    @info "TI productivity grid" A_min A_max
-
-    k_nodes = range(k_min, k_max; length=n_k)
-    A_nodes = range(A_min, A_max; length=n_A)
-
-    # Initial guess: consumption share at the (A=1) steady state everywhere,
-    # mirroring how the NN's output bias is initialized (learn_rbc.py parity).
-    res_ss = y_ss + (1.0 - p.delta) * k_ss
-    frac_ss = c_ss / res_ss
-    frac_policy = fill(frac_ss, n_k, n_A)
-
-    n_quad = 7
-    nodes, weights = gausshermite(n_quad)
-    z_nodes = nodes .* sqrt(2)
-    z_weights = weights ./ sqrt(pi)
-
-    return TISolver(p, k_ss, c_ss, y_ss, A_ss, n_k, n_A, k_min, k_max, A_min, A_max,
-                     k_nodes, A_nodes, frac_policy, z_nodes, z_weights)
+Evaluate the policy at `(k, A)`. Queries are clamped to the fitted grid box
+and the share to `(frac_floor, 1 - frac_floor)`; apply the share to the true
+resources at the *unclamped* state to get consumption.
+"""
+function consumption_share(pol::TIPolicy, k::Real, A::Real)
+    frac = pol.itp(clamp(k, pol.k_min, pol.k_max), clamp(A, pol.A_min, pol.A_max))
+    return clamp(frac, pol.frac_floor, 1.0 - pol.frac_floor)
 end
 
-_spline(ti::TISolver) = extrapolate(
-    scale(interpolate(ti.frac_policy, BSpline(Cubic(Line(OnGrid())))), ti.k_nodes, ti.A_nodes),
-    Line(),
-)
+(pol::TIPolicy)(k::Real, A::Real) = consumption_share(pol, k, A)
+
+share_spline(ti::TISolver, frac::Matrix{Float64}) =
+    scale(interpolate(frac, BSpline(Cubic(Line(OnGrid())))), ti.k_nodes, ti.A_nodes)
 
 """
-    solve!(ti::TISolver; tol=1e-6, max_iter=1000, damping=0.5, frac_floor=1e-6)
+    solve(ti::TISolver; tol=1e-7, max_iter=2000, frac_floor=1e-6, verbose=false)
 
-Fixed-point (time) iteration on the consumption *share* at the grid nodes
-(see [`TISolver`](@ref) for why a share rather than a level). Returns the
-final interpolant (a callable `itp(k, A) -> frac`).
+Run Coleman time iteration to a fixed point of the consumption-share policy.
+`tol` is the sup-norm of the share update (shares are O(0.1–0.5), so `1e-7`
+is a relative accuracy of ~1e-6). Returns a [`TIPolicy`](@ref); check
+`.converged` when running near the edges of the parameter box.
 """
-function solve!(ti::TISolver; tol::Float64=1e-6, max_iter::Int=1000, damping::Float64=0.5,
-                 frac_floor::Float64=1e-6)
+function solve(ti::TISolver; tol::Float64=1e-7, max_iter::Int=2000,
+               frac_floor::Float64=1e-6, verbose::Bool=false)
+    frac = fill(steady_state_share(ti.p), length(ti.k_nodes), length(ti.A_nodes))
+    frac_next = similar(frac)
+    diff = Inf
+    iter = 0
+    while iter < max_iter
+        iter += 1
+        coleman_step!(frac_next, ti, share_spline(ti, frac), frac_floor)
+        diff = maximum(abs(a - b) for (a, b) in zip(frac_next, frac))
+        frac, frac_next = frac_next, frac
+        verbose && iter % 50 == 0 && @info "TI sweep" iter diff
+        diff < tol && break
+    end
+    converged = diff < tol
+    if converged
+        verbose && @info "TI converged" iter diff
+    else
+        @warn "Time iteration did not converge" ti.p.beta ti.p.delta ti.p.rho iter diff
+    end
+    return TIPolicy(ti.p, share_spline(ti, frac), frac,
+                    first(ti.k_nodes), last(ti.k_nodes), first(ti.A_nodes), last(ti.A_nodes),
+                    frac_floor, converged, iter, diff)
+end
+
+"""
+    coleman_step!(frac_next, ti, itp, frac_floor)
+
+One sweep of the Coleman operator: solve the Euler equation exactly at every
+grid node, holding the future policy `itp` fixed. Nodes are independent, so
+the sweep is threaded.
+"""
+function coleman_step!(frac_next::Matrix{Float64}, ti::TISolver, itp, frac_floor::Float64)
     p = ti.p
-    itp = _spline(ti)
-    for iter in 1:max_iter
-        itp = _spline(ti)
-        frac_new = similar(ti.frac_policy)
-        for i in 1:ti.n_k, j in 1:ti.n_A
-            k = ti.k_nodes[i]
-            A = ti.A_nodes[j]
-
-            y = A * k^p.alpha
-            res = y + (1 - p.delta) * k
-
-            frac_old = clamp(ti.frac_policy[i, j], frac_floor, 1.0 - frac_floor)
-            c_old = frac_old * res
-            k_prime = res - c_old
-            k_prime_c = clamp(k_prime, ti.k_min, ti.k_max)
-
-            E_rhs = 0.0
-            for z in eachindex(ti.z_nodes)
-                eps = ti.z_nodes[z]
-                logA_prime = p.rho * log(A) + p.sigma_eps * eps
-                A_prime = exp(logA_prime)
-                A_prime_c = clamp(A_prime, ti.A_min, ti.A_max)
-
-                frac_prime = clamp(itp(k_prime_c, A_prime_c), frac_floor, 1.0 - frac_floor)
-                resources_prime = A_prime_c * k_prime_c^p.alpha + (1 - p.delta) * k_prime_c
-                c_prime = frac_prime * resources_prime
-                mu_prime = c_prime^(-p.gamma)
-                R_prime = p.alpha * A_prime * k_prime_c^(p.alpha - 1) + (1 - p.delta)
-                E_rhs += ti.z_weights[z] * mu_prime * R_prime
-            end
-
-            c_target = (p.beta * E_rhs)^(-1 / p.gamma)
-            frac_target = clamp(c_target / res, frac_floor, 1.0 - frac_floor)
-            frac_new[i, j] = damping * frac_target + (1 - damping) * frac_old
-        end
-
-        diff = maximum(abs.(frac_new .- ti.frac_policy))
-        ti.frac_policy = frac_new
-        if iter % 10 == 0
-            @info "TI iteration" iter diff
-        end
-        if diff < tol
-            @info "TI converged" iter diff
-            return _spline(ti)
-        end
-        if iter == max_iter
-            @warn "TI did not converge" diff
+    Threads.@threads for j in eachindex(ti.A_nodes)
+        A = ti.A_nodes[j]
+        for (i, k) in enumerate(ti.k_nodes)
+            res = resources(k, A, p.alpha, p.delta)
+            frac_next[i, j] = solve_node(ti, itp, res, A, frac_floor)
         end
     end
-    return _spline(ti)
+    return frac_next
 end
 
 """
-    simulate(ti::TISolver, policy; T=200, k0=nothing, A0=nothing, rng=Random.default_rng())
+    euler_gap(ti, itp, c, res, A, frac_floor)
 
-Simulate the TI-solved economy for `T` periods given an interpolant `policy`
-(as returned by [`solve!`](@ref); note `policy(k, A)` returns a consumption
-*share*, not a level).
-
-The policy is looked up at `(k, A)` clamped to the fitted grid (so we never
-ask the spline to extrapolate), then the resulting share is applied to the
-*true, unclamped* resources at `(kt, At)` — since the policy is already a
-bounded share, this is a safe, well-defined extrapolation rule by
-construction (no division by a possibly-tiny boundary resources term is
-needed, unlike a raw consumption-level policy). The *physical* state series
-returned is never clamped, so `k`/`A` out-of-bounds diagnostics computed from
-it stay meaningful.
+`u'(c) - beta * E[u'(c') R']` at a node with resources `res` and productivity
+`A`, where `k' = res - c` and next-period consumption comes from the share
+policy `itp` (queried inside the grid box, applied to true resources at the
+actual `(k', A')`). Strictly decreasing in `c`.
 """
-function simulate(ti::TISolver, policy; T::Int=200, k0=nothing, A0=nothing,
-                   rng::AbstractRNG=Random.default_rng())
+function euler_gap(ti::TISolver, itp, c::Float64, res::Float64, A::Float64, frac_floor::Float64)
     p = ti.p
-    k0 = k0 === nothing ? ti.k_ss : k0
-    A0 = A0 === nothing ? ti.A_ss : A0
-
-    k = zeros(T + 1)
-    A = zeros(T + 1)
-    c = zeros(T)
-    y = zeros(T)
-    inv = zeros(T)
-    k[1] = k0
-    A[1] = A0
-    eps = randn(rng, T)
-
-    for t in 1:T
-        kt, At = k[t], A[t]
-        yt = At * kt^p.alpha
-        y[t] = yt
-        resources = yt + (1 - p.delta) * kt
-
-        kt_q = clamp(kt, ti.k_min, ti.k_max)
-        At_q = clamp(At, ti.A_min, ti.A_max)
-        frac = clamp(policy(kt_q, At_q), 1e-6, 1.0 - 1e-6)
-        ct = frac * resources
-        c[t] = ct
-
-        inv[t] = yt - ct
-        k[t+1] = resources - ct
-
-        logA_next = p.rho * log(max(At, 1e-8)) + p.sigma_eps * eps[t]
-        A[t+1] = exp(logA_next)
+    k1 = res - c
+    k1_q = clamp(k1, first(ti.k_nodes), last(ti.k_nodes))
+    A_lo, A_hi = first(ti.A_nodes), last(ti.A_nodes)
+    logA = log(A)
+    rhs = 0.0
+    for (z, w) in zip(ti.quad.nodes, ti.quad.weights)
+        A1 = exp(p.rho * logA + p.sigma_eps * z)
+        frac1 = clamp(itp(k1_q, clamp(A1, A_lo, A_hi)), frac_floor, 1.0 - frac_floor)
+        c1 = frac1 * resources(k1, A1, p.alpha, p.delta)
+        rhs += w * marginal_utility(c1, p.gamma) * gross_return(k1, A1, p.alpha, p.delta)
     end
+    return marginal_utility(c, p.gamma) - p.beta * rhs
+end
 
-    return (capital=k[1:T], productivity=A[1:T], consumption=c, output=y, investment=inv)
+"""
+    solve_node(ti, itp, res, A, frac_floor) -> frac
+
+Solve the node's Euler equation for consumption by bisection on
+`c ∈ (frac_floor, 1 - frac_floor) * res`. The bracket is guaranteed:
+`euler_gap → +∞` as `c → 0` (marginal utility blows up) and `→ -∞` as
+`c → res` (the return on vanishing capital blows up). Corner cases where the
+gap does not change sign on the interval return the corresponding bound.
+"""
+function solve_node(ti::TISolver, itp, res::Float64, A::Float64, frac_floor::Float64)
+    lo = frac_floor * res
+    hi = (1.0 - frac_floor) * res
+    euler_gap(ti, itp, lo, res, A, frac_floor) <= 0.0 && return frac_floor
+    euler_gap(ti, itp, hi, res, A, frac_floor) >= 0.0 && return 1.0 - frac_floor
+    while hi - lo > 1e-12 * res
+        mid = 0.5 * (lo + hi)
+        if euler_gap(ti, itp, mid, res, A, frac_floor) > 0.0
+            lo = mid
+        else
+            hi = mid
+        end
+    end
+    return clamp(0.5 * (lo + hi) / res, frac_floor, 1.0 - frac_floor)
 end
