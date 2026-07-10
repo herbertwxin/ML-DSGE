@@ -133,20 +133,31 @@ function sample_batch(p::RBCParams, rng::AbstractRNG, batch_size::Int)
 end
 
 """
-    compute_residuals(model, batch, quad::Quadrature)
+    euler_terms(model, batch, quad::Quadrature) -> (resid, k_oob)
 
-Normalized Euler-equation residual for a batch from [`sample_batch`](@ref):
+Per-sample ingredients of the training loss for a batch from
+[`sample_batch`](@ref):
 
-    resid = (E[beta * u'(c') * R'] - u'(c)) / u'(c)
+- `resid`: normalized Euler residual
+  `(E[beta * u'(c') * R'] - u'(c)) / u'(c)`. The raw residual is in
+  marginal-utility units, whose magnitude varies by orders of magnitude
+  across the sampled `(gamma, c)` range; an unnormalized MSE would be
+  dominated by whichever draws have the most extreme curvature. Dividing by
+  `u'(c)` makes it a dimensionless relative Euler error so all draws
+  contribute on a comparable scale.
 
-The raw residual is in marginal-utility units, whose magnitude varies by
-orders of magnitude across the sampled `(gamma, c)` range; an unnormalized MSE
-would be dominated by whichever draws have the most extreme curvature,
-starving the hard (high beta / low delta / high gamma) region of gradient
-signal. Dividing by `u'(c)` makes the residual a dimensionless relative Euler
-error so all draws contribute on a comparable scale.
+- `k_oob`: squared overshoot of *normalized* next-period capital outside
+  `[0, 1]` — the over-saving (transversality) penalty. The Euler equation is
+  only a first-order condition: a continuum of over-saving policies (consume
+  a vanishing share, accumulate capital without bound, consumption growth
+  tracking `(beta*R)^(1/gamma)`) satisfies it pointwise while violating
+  transversality, and the residual — computed with the network supplying its
+  own continuation — cannot tell them from the true policy. Those spurious
+  solutions must drive `k'` out of the state box, so penalizing out-of-box
+  `k'` removes them from the feasible set without referencing any external
+  benchmark; inside the box the penalty is identically zero.
 """
-function compute_residuals(model, batch, quad::Quadrature)
+function euler_terms(model, batch, quad::Quadrature)
     (; inputs, k, A, k_low, k_high, A_low, A_high,
        alpha, beta, delta, rho, gamma, sigma_eps) = batch
 
@@ -172,26 +183,44 @@ function compute_residuals(model, batch, quad::Quadrature)
         rhs = rhs .+ w .* beta .* (c1 .^ (-gamma)) .* R1
     end
 
-    return (rhs .- mu) ./ mu
+    k_oob = @. max(k1_norm - 1.0, 0.0)^2 + max(-k1_norm, 0.0)^2
+    return (rhs .- mu) ./ mu, k_oob
 end
 
-euler_loss(model, batch, quad) = mean(abs2, compute_residuals(model, batch, quad))
+"Normalized Euler residuals only (diagnostics); see [`euler_terms`](@ref)."
+compute_residuals(model, batch, quad::Quadrature) = euler_terms(model, batch, quad)[1]
+
+"""
+    euler_loss(model, batch, quad; k_oob_weight=1.0)
+
+Training objective: mean squared normalized Euler residual plus
+`k_oob_weight` times the mean over-saving penalty (see [`euler_terms`](@ref)).
+"""
+function euler_loss(model, batch, quad::Quadrature; k_oob_weight::Float64=1.0)
+    resid, k_oob = euler_terms(model, batch, quad)
+    return mean(abs2, resid) + k_oob_weight * mean(k_oob)
+end
 
 """
     train!(solver::NNSolver; batch_size=2048, epochs=50_000, eval_every=200,
            val_batch_size=8192, patience=20, min_rel_improve=5e-3,
-           panel_n_cases=4, panel_T=120, panel_seed=321,
+           k_oob_weight=1.0, panel_n_cases=4, panel_T=120, panel_seed=321,
            best_checkpoint_path=nothing, rng=Random.default_rng())
 
-Minimize the mean squared normalized Euler residual over freshly sampled
-batches, with early stopping on a fixed validation batch. Every `eval_every`
-epochs a fixed NN-vs-TI panel (TI policies solved once up front) is
-re-simulated for rollout diagnostics. Returns the per-epoch training losses;
-the solver's model holds the best-validation weights on exit.
+Minimize [`euler_loss`](@ref) — mean squared normalized Euler residual plus
+the `k_oob_weight`-scaled over-saving penalty — over freshly sampled batches,
+with early stopping on the same penalized loss evaluated on a fixed
+validation batch. Every `eval_every` epochs a fixed NN-vs-TI panel (TI
+policies solved once up front) is re-simulated and logged; the panel is
+*diagnostic only* and plays no role in stopping or model selection, so the
+network learns the model without ever referencing the TI benchmark. Returns
+the per-epoch training losses; the solver's model holds the best-validation
+weights on exit.
 """
 function train!(solver::NNSolver;
                 batch_size::Int=2048, epochs::Int=50_000, eval_every::Int=200,
                 val_batch_size::Int=8192, patience::Int=20, min_rel_improve::Float64=5e-3,
+                k_oob_weight::Float64=1.0,
                 panel_n_cases::Int=4, panel_T::Int=120, panel_seed::Int=321,
                 best_checkpoint_path::Union{Nothing,String}=nothing,
                 rng::AbstractRNG=Random.default_rng())
@@ -205,22 +234,26 @@ function train!(solver::NNSolver;
     bad_evals = 0
     best_state = nothing
 
-    @info "Training on the normalized Euler residual over the structural-parameter box..."
+    @info "Training on normalized Euler residual + over-saving penalty..." k_oob_weight
     for epoch in 1:epochs
         batch = sample_batch(solver.p, rng, batch_size)
-        loss_val, grads = Flux.withgradient(m -> euler_loss(m, batch, solver.quad), solver.model)
+        loss_val, grads = Flux.withgradient(
+            m -> euler_loss(m, batch, solver.quad; k_oob_weight), solver.model)
         Flux.update!(solver.opt_state, solver.model, grads[1])
         push!(losses, loss_val)
 
         epoch % eval_every == 0 || continue
 
-        val_loss = euler_loss(solver.model, val_batch, solver.quad)
+        val_resid, val_k_oob = euler_terms(solver.model, val_batch, solver.quad)
+        val_mse = mean(abs2, val_resid)
+        val_oob = mean(val_k_oob)
+        val_loss = val_mse + k_oob_weight * val_oob
         panel_metrics = evaluate_validation_panel(solver, panel, panel_T)
         if panel_metrics === nothing
-            @info "epoch" epoch train_mse = loss_val val_mse = val_loss
+            @info "epoch" epoch train_loss = loss_val val_mse val_oob
         else
             lr = panel_metrics["level_ratio"]
-            @info "epoch" epoch train_mse = loss_val val_mse = val_loss mean_nrmse = panel_metrics["aggregate"]["mean_nrmse"] max_nrmse = panel_metrics["aggregate"]["max_nrmse"] level_ratio_c = lr["consumption"] level_ratio_k = lr["capital"]
+            @info "epoch" epoch train_loss = loss_val val_mse val_oob mean_nrmse = panel_metrics["aggregate"]["mean_nrmse"] max_nrmse = panel_metrics["aggregate"]["max_nrmse"] level_ratio_c = lr["consumption"] level_ratio_k = lr["capital"]
         end
 
         rel_improve = (best_val_loss - val_loss) / max(abs(best_val_loss), 1e-12)

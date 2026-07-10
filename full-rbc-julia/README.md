@@ -140,6 +140,49 @@ carrying `converged`, `iterations`, and the final `residual`, and the
 divergence sweep records `ti_converged` per case — a benchmark that did not
 converge is flagged instead of silently trusted.
 
+## Fix applied: over-saving (transversality) penalty in the NN loss
+
+**Symptom.** With a pure Euler-residual loss, long training runs drifted to a
+severe under-consumption policy: train/val MSE kept falling to ~1e-5 while
+panel rollouts showed NN consumption at ~10% of TI and capital ~10x TI, on
+*every* panel case, with the drift slow and monotone (and early stopping
+never triggering, because the validation loss — the same residual objective —
+genuinely kept improving).
+
+**Cause.** The Euler equation is only a first-order condition; the true
+policy is pinned down by it *plus* the transversality condition. A continuum
+of **over-saving** policies — consume a vanishing share, accumulate capital
+without bound, consumption growth tracking `(beta*R)^(1/gamma)` — satisfies
+the Euler equation pointwise and violates transversality. Because the
+training residual is computed with the network supplying its own
+continuation values (increasingly at `k'` far outside the training box,
+where nothing constrains it), these spurious solutions score just as well as
+the true one, and the loss surface is nearly flat along the "how much do we
+save" direction. This is *not* multiple equilibria in the model (the RBC
+model here has a unique interior equilibrium, and grid-based TI cannot fall
+for the spurious solutions because its state space is compact — continuation
+queries are clamped to the grid). It is an identification failure of the
+pure Euler-residual objective on an unbounded state space.
+
+**Fix** (`euler_terms` / `euler_loss` in `src/neural_solver.jl`): add an
+over-saving penalty that makes the state box effectively invariant,
+
+```julia
+loss = mean(resid.^2) + k_oob_weight * mean(k_oob)
+k_oob = max(k1_norm - 1, 0)^2 + max(-k1_norm, 0)^2   # k1_norm = normalized k'
+```
+
+Over-saving solutions *must* drive `k'` out of the box, so the penalty
+removes them from the feasible set; inside the box it is identically zero, so
+the in-box Euler dynamics are untouched. Crucially, the penalty references
+only the model's own state bounds — **not** the TI benchmark — so the network
+still has to learn the RBC solution on its own; the TI panel logged during
+training remains diagnostic only and plays no role in stopping or model
+selection. Early stopping keys on the penalized validation loss. The weight
+is `--k-oob-weight` (default `1.0`); mild out-of-box excursions for extreme
+calibrations (whose true ergodic set exceeds the fixed box) trade a small
+boundary bias for identification.
+
 ## Fix kept: normalized Euler residual (NN training loss)
 
 The raw Euler residual `E[beta * mu' * R'] - mu` is in marginal-utility
@@ -166,9 +209,11 @@ so every parameter draw contributes on a comparable, dimensionless scale.
   pre-set so the untrained policy starts at the steady-state share.
 - Expectation by 7-point Gauss-Hermite quadrature (`Quadrature` in
   `src/model.jl`, shared with the TI solver).
-- Early stopping on a fixed validation residual batch; a fixed NN-vs-TI panel
-  (TI policies solved once up front, in parallel) is re-simulated every
-  `eval_every` epochs for rollout diagnostics.
+- Loss: mean squared normalized Euler residual + over-saving penalty (see the
+  fix sections above); early stopping on the same penalized loss evaluated on
+  a fixed validation batch. A fixed NN-vs-TI panel (TI policies solved once
+  up front, in parallel) is re-simulated every `eval_every` epochs — purely
+  as a logged diagnostic, never as a training signal.
 - Checkpointing: `Flux.state(model)` + `RBCParams` in one BSON file. The
   checkpoint format is unchanged from earlier versions, so existing
   `rbc_nn.bson` files load as-is.
@@ -191,8 +236,9 @@ julia --project=. -t auto scripts/train.jl
 
 Flags: `--batch-size 2048`, `--epochs 50000`, `--eval-every 200`,
 `--val-batch-size 8192`, `--patience 20`, `--min-rel-improve 5e-3`,
-`--panel-n-cases 4`, `--panel-T 120`, `--panel-seed 321`, `--seed 42`,
-`--checkpoint rbc_nn.bson`. Writes `rbc_nn.bson` and `learn_rbc_loss.png`.
+`--k-oob-weight 1.0`, `--panel-n-cases 4`, `--panel-T 120`,
+`--panel-seed 321`, `--seed 42`, `--checkpoint rbc_nn.bson`.
+Writes `rbc_nn.bson` and `learn_rbc_loss.png`.
 
 ### Compare one calibration
 
@@ -247,6 +293,9 @@ Reading guide:
 - The NN's simulated state is intentionally never clamped between periods; a
   state outside the box the network was normalized on extrapolates without a
   restoring force (the sigmoid share keeps it bounded, but not accurate).
+  The over-saving penalty discourages the *policy* from steering out of the
+  box, but shock realizations can still push the state out for volatile
+  calibrations.
 - The training validation panel (default 4 cases) is a uniform draw and may
   miss the hard region; increase `--panel-n-cases` for model selection if you
   see divergence concentrated there.

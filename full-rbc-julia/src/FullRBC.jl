@@ -30,7 +30,7 @@ export RBCParams, steady_state, steady_state_batch, steady_state_share,
        production, resources, gross_return, marginal_utility, next_productivity,
        sample_params_uniform, with_calibration, params_to_dict, params_from_dict,
        TISolver, TIPolicy, solve,
-       NNSolver, NNPolicy, sample_batch, compute_residuals, euler_loss, train!,
+       NNSolver, NNPolicy, sample_batch, compute_residuals, euler_terms, euler_loss, train!,
        save_checkpoint, load_checkpoint,
        consumption_share, simulate,
        gap_metrics, build_validation_panel, evaluate_validation_panel
