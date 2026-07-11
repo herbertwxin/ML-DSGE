@@ -38,7 +38,7 @@ Base.@kwdef struct RBCParams
 
     # Oversampling of the "hard region" (high beta, low delta) in training
     # batches. Off by default.
-    hard_region_prob::Float64 = 0.0
+    hard_region_prob::Float64 = 0.3
     hard_beta_low_norm::Float64 = 0.85
     hard_delta_high_norm::Float64 = 0.20
 end
