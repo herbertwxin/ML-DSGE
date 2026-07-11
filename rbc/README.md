@@ -225,7 +225,7 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 julia --project=. -t auto scripts/train.jl
 ```
 
-Flags: `--batch-size 2048`, `--epochs 50000`, `--eval-every 200`,
+Flags: `--batch-size` (default: 2048 on CPU, 32768 on GPU), `--epochs 50000`, `--eval-every 200`,
 `--val-batch-size 8192`, `--patience 20`, `--min-rel-improve 5e-3`,
 `--k-oob-weight 1.0`, `--panel-n-cases 4`, `--panel-T 120`,
 `--panel-seed 321`, `--seed 42`, `--checkpoint rbc_nn.bson`,
@@ -304,22 +304,50 @@ NN training runs on a GPU when one is available, automatically:
   `gpu_device()`, falling back to the CPU. Override per run with
   `--device auto|cpu|gpu` on `scripts/train.jl` (`gpu` errors if none is
   functional, instead of silently using the CPU).
-- **Precision.** Training uses Float32 on any GPU (Apple GPUs have no Float64
-  at all; Float32 is also much faster on NVIDIA) and Float64 on the CPU.
-  Batches are always *sampled* on the CPU in Float64 — so draws are
-  reproducible for a given seed regardless of device — then converted and
-  transferred (`to_device`).
-- **What stays on CPU.** Simulation (`NNPolicy` takes a CPU/Float64 copy of
-  the network — pointwise rollouts on a GPU would be slower than the copy),
-  the TI benchmark, and checkpoints: `save_checkpoint` always writes
-  CPU/Float64 `Flux.state`, so checkpoints are interchangeable across
-  devices and identical in format to pre-GPU ones. `load_checkpoint` defaults
-  to the CPU; pass `device=select_device()` to continue training on GPU.
-- **Expectations.** The default network is tiny (4×64), so on an Apple-silicon
-  GPU throughput is roughly on par with the CPU (kernel-launch overhead
-  dominates; ~1.5x at `--batch-size 8192` in a quick local benchmark). GPU
-  pays off with wider networks, larger batches, or a discrete NVIDIA card.
-  Use `--device cpu` if you want bit-identical Float64 training runs.
+- **Precision.** The entire NN stack — network weights, training batches,
+  loss, checkpoints — is uniformly **Float32 on every device** (CPU included).
+  Apple GPUs have no Float64 at all, NVIDIA consumer cards run it at 1/64
+  rate, and Float32 resolution (~1e-7) is far below the converged
+  Euler-residual loss (~1e-4), so nothing scientific is lost and there is no
+  conversion layer anywhere. The precision-sensitive numerics stay Float64:
+  the **TI benchmark** (Coleman bisection converges to 1e-12 relative
+  tolerance, below `eps(Float32)`) and the **simulated state paths**;
+  `NNPolicy` casts the state to Float32 only at the network-input boundary.
+  Batches are sampled on the CPU (reproducible per seed) and moved with
+  `device(batch)`.
+- **What stays on CPU.** Simulation (`NNPolicy` takes a CPU copy of the
+  network — pointwise rollouts on a GPU would be slower than the copy), the
+  TI benchmark, and checkpoints: `save_checkpoint` always writes CPU
+  `Flux.state` (Float32); older Float64 checkpoints load transparently.
+  `load_checkpoint` defaults to the CPU; pass `device=select_device()` to
+  continue training on GPU.
+- **Throughput / utilization.** The default network is tiny (4×64), so GPU
+  training is kernel-launch-bound, not compute-bound — at small batches a
+  discrete GPU sits mostly idle between launches (~20% utilization observed
+  on an RTX 4090 at `--batch-size 2048` before the fixes below). Two things
+  keep the GPU busy:
+  1. All 7 Gauss-Hermite quadrature nodes are evaluated in **one** network
+     call per step (an `8×(batch*7)` input built in `euler_terms`), instead
+     of 7 separate small forward/backward passes.
+  2. The default batch size is **device-dependent** (`default_batch_size`):
+     2048 on CPU, 32768 on GPU. The loss is an expectation over uniform
+     draws, so a larger batch only lowers gradient noise — but budget epochs
+     accordingly: at 16x the batch each step sees 16x the samples, so use
+     proportionally fewer epochs (e.g. `--epochs 5000` rather than 50000).
+  Training is Float32 on every device, so `--device cpu` differs from GPU
+  runs only in speed (and kernel-level summation order), not in precision.
+- **RunPod / ephemeral containers.** Only `/workspace` survives a pod
+  restart; a Julia installed via `juliaup` into `~` (and the `~/.julia`
+  package depot) is wiped with the container. Install the Julia tarball
+  under `/workspace` and point the depot there too:
+
+  ```bash
+  export JULIA_DEPOT_PATH=/workspace/.julia
+  curl -fsSL https://julialang-s3.julialang.org/bin/linux/x64/1.12/julia-1.12.1-linux-x86_64.tar.gz | tar xz -C /workspace
+  /workspace/julia-1.12.1/bin/julia --project=. -e 'using Pkg; Pkg.instantiate()'
+  ```
+
+  (re-set the `export` per session, or add it to the pod's start command).
 
 **Troubleshooting: "No functional GPU backend found! Defaulting to CPU" on an
 NVIDIA machine.** With `--device auto` training silently continues on the CPU

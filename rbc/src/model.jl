@@ -73,8 +73,10 @@ Elementwise (A = 1) deterministic steady state; works on scalars and arrays
 alike via broadcasting.
 """
 function steady_state_batch(alpha, beta, delta)
-    term = @. (1.0 / beta - (1.0 - delta)) / alpha
-    k_ss = @. term^(1.0 / (alpha - 1.0))
+    # Integer literals keep the computation in the input eltype (Float32 for
+    # NN training batches, Float64 for the TI benchmark) without promotion.
+    term = @. (1 / beta - (1 - delta)) / alpha
+    k_ss = @. term^(1 / (alpha - 1))
     y_ss = @. k_ss^alpha
     c_ss = @. y_ss - delta * k_ss
     return k_ss, c_ss, y_ss

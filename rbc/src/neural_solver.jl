@@ -32,20 +32,28 @@ function select_device(preference::Symbol=:auto)
     return dev
 end
 
-# Apple GPUs have no Float64 support (and Float32 is much faster on NVIDIA
-# too), so training runs in Float32 on any GPU and Float64 on the CPU.
-train_eltype(device) = device isa typeof(cpu_device()) ? Float64 : Float32
+"True if `device` is the CPU device (as returned by `cpu_device()` / fallback)."
+is_cpu_device(device) = device isa typeof(cpu_device())
 
 """
-    to_device(batch::NamedTuple, device, T) -> NamedTuple
+    default_batch_size(device)
 
-Convert every array in a [`sample_batch`](@ref) result to element type `T`
-and move it to `device`. Batches are always *sampled* on the CPU in Float64
-(keeping draws reproducible for a given `rng` regardless of device), then
-transferred.
+2048 on the CPU; 32768 on a GPU. The network is tiny (4×64 hidden units), so
+a GPU is kernel-launch-bound at small batches — it needs wide batches to have
+enough work per launch. The training loss is an expectation over uniform
+draws, so a larger batch is statistically free (it only lowers gradient
+noise); budget accordingly: at 16x the batch, each epoch sees 16x the
+samples, so fewer epochs are needed.
 """
-to_device(batch::NamedTuple, device, ::Type{T}) where {T} =
-    map(x -> x isa AbstractArray ? device(convert(AbstractArray{T}, x)) : x, batch)
+default_batch_size(device) = is_cpu_device(device) ? 2048 : 32_768
+
+# The whole NN stack — network weights, training batches, loss — is uniformly
+# Float32 on every device: Apple GPUs have no Float64 at all, NVIDIA consumer
+# cards run Float64 at 1/64 rate, and Float32 precision is far below the
+# converged Euler-residual loss (~1e-4), so nothing scientific is lost. The
+# precision-sensitive numerics live elsewhere and stay Float64: the TI
+# benchmark (bisection to 1e-12 relative tolerance) and the simulated state
+# paths; `NNPolicy` casts to Float32 only at the network-input boundary.
 
 """
     build_policy_net(input_dim, hidden_dims, output_bias)
@@ -54,12 +62,12 @@ to_device(batch::NamedTuple, device, ::Type{T}) where {T} =
 is pre-set to `output_bias`, so the untrained policy starts near the
 steady-state consumption share instead of at 0.5.
 """
-function build_policy_net(input_dim::Int, hidden_dims::Vector{Int}, output_bias::Float64)
+function build_policy_net(input_dim::Int, hidden_dims::Vector{Int}, output_bias::Real)
     dims = [input_dim; hidden_dims]
     hidden = (Dense(dims[i], dims[i+1], elu) for i in 1:length(hidden_dims))
     out = Dense(dims[end], 1, sigmoid)
     out.bias .= output_bias
-    return Chain(hidden..., out) |> f64
+    return Chain(hidden..., out)   # Flux default: Float32
 end
 
 """
@@ -69,10 +77,10 @@ Policy network + optimizer state + quadrature for the Euler expectation.
 The `RBCParams` carries both the reference calibration and the structural
 bounds the network is trained over.
 
-The model lives on `device` (see [`select_device`](@ref)) in the matching
-precision ([`train_eltype`](@ref): Float32 on GPU, Float64 on CPU).
-`model_state` — a CPU/Float64 `Flux.state` from a checkpoint — is loaded
-before the device/precision move, so checkpoints stay device-independent.
+The model lives on `device` (see [`select_device`](@ref)) in Float32.
+`model_state` — a CPU `Flux.state` from a checkpoint — is loaded before the
+device move, so checkpoints stay device-independent (older Float64
+checkpoints are converted on load by `Flux.loadmodel!`).
 """
 struct NNSolver{M<:Chain,O,D}
     p::RBCParams
@@ -86,8 +94,7 @@ function NNSolver(p::RBCParams; lr::Float64=5e-4, device=select_device(), model_
     frac_ss = steady_state_share(p)
     model = build_policy_net(8, [64, 64, 64, 64], log(frac_ss / (1.0 - frac_ss)))
     model_state === nothing || Flux.loadmodel!(model, model_state)
-    T = train_eltype(device)
-    model = (T === Float32 ? f32(model) : model) |> device
+    model = model |> device
     return NNSolver(p, model, Flux.setup(Adam(lr), model), Quadrature(7), device)
 end
 
@@ -98,8 +105,9 @@ The network evaluated at one fixed structural calibration: pre-computes the
 normalized parameter entries and the `(k, A)` normalization box so the policy
 can be queried pointwise with `consumption_share(policy, k, A)` (and hence
 run through the shared [`simulate`](@ref)). Simulation is a scalar
-state-by-state loop, so the policy always uses a CPU/Float64 copy of the
-model — pointwise GPU calls would be far slower than the copy.
+state-by-state loop in Float64, so the policy uses a CPU copy of the model
+(pointwise GPU calls would be far slower than the copy) and casts the state
+to Float32 only at the network input.
 """
 struct NNPolicy{M}
     model::M
@@ -120,13 +128,13 @@ function NNPolicy(solver::NNSolver, p::RBCParams)
              normalize_scalar(p.rho, base.rho_bounds),
              normalize_scalar(p.gamma, base.gamma_bounds),
              normalize_scalar(p.sigma_eps, base.sigma_eps_bounds))
-    return NNPolicy(f64(cpu(solver.model)), theta, k_low, k_high, A_low, A_high)
+    return NNPolicy(cpu(solver.model), theta, k_low, k_high, A_low, A_high)
 end
 
 function consumption_share(pol::NNPolicy, k::Real, A::Real)
     kn = (k - pol.k_low) / (pol.k_high - pol.k_low)
     an = (A - pol.A_low) / (pol.A_high - pol.A_low)
-    x = [kn, an, pol.theta_norm...]
+    x = Float32[kn, an, pol.theta_norm...]
     return pol.model(reshape(x, 8, 1))[1]
 end
 
@@ -140,14 +148,15 @@ simulate(solver::NNSolver, p::RBCParams; kwargs...) = simulate(NNPolicy(solver, 
 """
     sample_batch(p::RBCParams, rng, batch_size)
 
-Draw a training batch uniformly over the normalized state × parameter box.
-Returns the `8 × batch_size` network input matrix plus the physical states,
-structural parameters, and per-sample `(k, A)` support needed to evaluate the
-Euler residual.
+Draw a Float32 training batch uniformly over the normalized state × parameter
+box. Returns the `8 × batch_size` network input matrix plus the physical
+states, structural parameters, and per-sample `(k, A)` support needed to
+evaluate the Euler residual. Sampling happens on the CPU (reproducible for a
+given `rng`); move the batch with `device(batch)`.
 """
 function sample_batch(p::RBCParams, rng::AbstractRNG, batch_size::Int)
     # Rows: k, A, alpha, beta, delta, rho, gamma, sigma_eps (all in [0, 1]).
-    inputs = rand(rng, 8, batch_size)
+    inputs = rand(rng, Float32, 8, batch_size)
 
     if p.hard_region_prob > 0.0
         for col in axes(inputs, 2)
@@ -158,20 +167,22 @@ function sample_batch(p::RBCParams, rng::AbstractRNG, batch_size::Int)
         end
     end
 
-    alpha     = denormalize01(inputs[3, :], p.alpha_bounds...)
-    beta      = denormalize01(inputs[4, :], p.beta_bounds...)
-    delta     = denormalize01(inputs[5, :], p.delta_bounds...)
-    rho       = denormalize01(inputs[6, :], p.rho_bounds...)
-    gamma     = denormalize01(inputs[7, :], p.gamma_bounds...)
-    sigma_eps = denormalize01(inputs[8, :], p.sigma_eps_bounds...)
+    b32(bounds) = Float32.(bounds)   # RBCParams stores Float64 bounds
+    alpha     = denormalize01(inputs[3, :], b32(p.alpha_bounds)...)
+    beta      = denormalize01(inputs[4, :], b32(p.beta_bounds)...)
+    delta     = denormalize01(inputs[5, :], b32(p.delta_bounds)...)
+    rho       = denormalize01(inputs[6, :], b32(p.rho_bounds)...)
+    gamma     = denormalize01(inputs[7, :], b32(p.gamma_bounds)...)
+    sigma_eps = denormalize01(inputs[8, :], b32(p.sigma_eps_bounds)...)
 
-    sigma_stat = @. sigma_eps / sqrt(max(1e-4, 1.0 - rho^2))
-    A_low = @. exp(-p.A_sigma_mult * sigma_stat)
-    A_high = @. max(exp(p.A_sigma_mult * sigma_stat), A_low + 1e-6)
+    A_mult = Float32(p.A_sigma_mult)
+    sigma_stat = @. sigma_eps / sqrt(max(1f-4, 1 - rho^2))
+    A_low = @. exp(-A_mult * sigma_stat)
+    A_high = @. max(exp(A_mult * sigma_stat), A_low + 1f-6)
 
     k_ss, _, _ = steady_state_batch(alpha, beta, delta)
-    k_low = p.k_bounds[1] .* k_ss
-    k_high = p.k_bounds[2] .* k_ss
+    k_low = Float32(p.k_bounds[1]) .* k_ss
+    k_high = Float32(p.k_bounds[2]) .* k_ss
 
     k = denormalize01(inputs[1, :], k_low, k_high)
     A = denormalize01(inputs[2, :], A_low, A_high)
@@ -209,35 +220,43 @@ function euler_terms(model, batch, quad::Quadrature)
     (; inputs, k, A, k_low, k_high, A_low, A_high,
        alpha, beta, delta, rho, gamma, sigma_eps) = batch
 
-    # Literals/constants must be in the batch's element type: a Float64
-    # scalar broadcast over Float32 GPU arrays would promote everything to
-    # Float64, which Apple GPUs cannot execute at all.
-    T = eltype(k)
-    c_floor = T(1e-6)
-    k_floor = T(1e-8)
-
     frac = vec(model(inputs))
     res = @. A * k^alpha + (1 - delta) * k
-    c = max.(frac .* res, c_floor)
-    k1 = max.(res .- c, k_floor)
+    c = max.(frac .* res, 1f-6)
+    k1 = max.(res .- c, 1f-8)
     mu = c .^ (-gamma)
 
     k1_norm = normalize01(k1, k_low, k_high)
     logA = log.(A)
     theta_rows = inputs[3:8, :]
 
-    rhs = zero(mu)
-    for (zn, wn) in zip(quad.nodes, quad.weights)
-        z, w = T(zn), T(wn)
-        A1 = @. exp(rho * logA + sigma_eps * z)
-        A1_norm = normalize01(A1, A_low, A_high)
-        inputs1 = vcat(reshape(k1_norm, 1, :), reshape(A1_norm, 1, :), theta_rows)
-        frac1 = vec(model(inputs1))
-        res1 = @. A1 * k1^alpha + (1 - delta) * k1
-        c1 = max.(frac1 .* res1, c_floor)
-        R1 = @. alpha * A1 * k1^(alpha - 1) + (1 - delta)
-        rhs = rhs .+ w .* beta .* (c1 .^ (-gamma)) .* R1
+    # Device-resident quadrature rows (1×Q), kept off the AD tape. Built with
+    # `similar(k, ...)` so they live wherever the batch lives.
+    Q = length(quad.nodes)
+    zrow, wrow, onesrow = Flux.Zygote.ignore() do
+        z = copyto!(similar(k, 1, Q), reshape(Float32.(quad.nodes), 1, Q))
+        w = copyto!(similar(k, 1, Q), reshape(Float32.(quad.weights), 1, Q))
+        o = fill!(similar(k, 1, Q), 1f0)
+        (z, w, o)
     end
+
+    # All Q quadrature nodes go through the network in ONE call: an 8×(B*Q)
+    # input whose q-th block of B columns is node q. This is a small model, so
+    # one fat matmul keeps a GPU busy where Q separate skinny calls (and their
+    # backward passes) leave it idle between kernel launches. B×Q matrices
+    # broadcast the per-sample vectors down columns and the per-node rows
+    # across; `reshape(·, 1, :)` flattens them in exactly the block order the
+    # network input needs (sample index fastest, node index by block).
+    A1 = @. exp(rho * logA + sigma_eps * zrow)              # B×Q
+    A1_norm = @. (A1 - A_low) / (A_high - A_low)            # B×Q
+    k1_rep = k1_norm .* onesrow                             # B×Q, equal columns
+    inputs1 = vcat(reshape(k1_rep, 1, :), reshape(A1_norm, 1, :),
+                   repeat(theta_rows, 1, Q))                # 8×(B*Q)
+    frac1 = reshape(model(inputs1), :, Q)                   # B×Q
+    res1 = @. A1 * k1^alpha + (1 - delta) * k1
+    c1 = max.(frac1 .* res1, 1f-6)
+    R1 = @. alpha * A1 * k1^(alpha - 1) + (1 - delta)
+    rhs = beta .* vec(sum(@.(c1^(-gamma) * R1 * wrow); dims=2))
 
     k_oob = @. max(k1_norm - 1, 0)^2 + max(-k1_norm, 0)^2
     return (rhs .- mu) ./ mu, k_oob
@@ -254,9 +273,8 @@ Training objective: mean squared normalized Euler residual plus
 """
 function euler_loss(model, batch, quad::Quadrature; k_oob_weight::Real=1.0)
     resid, k_oob = euler_terms(model, batch, quad)
-    # Keep the loss scalar in the batch precision: a Float64 weight would
-    # promote it and seed the backward pass with Float64 on the GPU.
-    return mean(abs2, resid) + eltype(resid)(k_oob_weight) * mean(k_oob)
+    # Float32 weight keeps the loss scalar (and hence the backward seed) Float32.
+    return mean(abs2, resid) + Float32(k_oob_weight) * mean(k_oob)
 end
 
 """
@@ -283,9 +301,8 @@ function train!(solver::NNSolver;
                 best_checkpoint_path::Union{Nothing,String}=nothing,
                 rng::AbstractRNG=Random.default_rng())
     losses = Float64[]
-    T = train_eltype(solver.device)
-    @info "Training device" solver.device precision = T
-    val_batch = to_device(sample_batch(solver.p, rng, val_batch_size), solver.device, T)
+    @info "Training device" solver.device
+    val_batch = solver.device(sample_batch(solver.p, rng, val_batch_size))
     panel = build_validation_panel(solver.p, panel_n_cases, panel_seed)
     isempty(panel) || @info "Validation panel ready" n_cases = length(panel) panel_T
 
@@ -296,7 +313,7 @@ function train!(solver::NNSolver;
 
     @info "Training on normalized Euler residual + over-saving penalty..." k_oob_weight
     for epoch in 1:epochs
-        batch = to_device(sample_batch(solver.p, rng, batch_size), solver.device, T)
+        batch = solver.device(sample_batch(solver.p, rng, batch_size))
         loss_val, grads = Flux.withgradient(
             m -> euler_loss(m, batch, solver.quad; k_oob_weight), solver.model)
         Flux.update!(solver.opt_state, solver.model, grads[1])
@@ -402,13 +419,13 @@ end
     save_checkpoint(solver::NNSolver, path)
 
 Save `Flux.state(model)` plus the `RBCParams` to a BSON file. The state is
-always written as CPU/Float64 arrays, so checkpoints are interchangeable
-across devices (and identical in format to pre-GPU checkpoints).
+always written as CPU arrays (Float32), so checkpoints are interchangeable
+across devices; older Float64 checkpoints load transparently.
 """
 function save_checkpoint(solver::NNSolver, path::AbstractString)
     dir = dirname(path)
     isempty(dir) || mkpath(dir)
-    model_state = Flux.state(f64(cpu(solver.model)))
+    model_state = Flux.state(cpu(solver.model))
     p = solver.p
     BSON.@save path model_state p
     return path

@@ -26,7 +26,7 @@ function save_loss_plot(losses, path)
 end
 
 function main(;
-    batch_size::Int=2048,
+    batch_size::Union{Int,Nothing}=nothing,   # default: 2048 CPU / 32768 GPU
     epochs::Int=50_000,
     eval_every::Int=200,
     val_batch_size::Int=8192,
@@ -41,6 +41,8 @@ function main(;
     device::String="auto",
 )
     solver = NNSolver(RBCParams(); device=select_device(Symbol(device)))
+    batch_size = something(batch_size, default_batch_size(solver.device))
+    @info "Batch size" batch_size
     losses = train!(
         solver;
         batch_size, epochs, eval_every, val_batch_size, patience, min_rel_improve,
@@ -62,7 +64,7 @@ end
 if abspath(PROGRAM_FILE) == @__FILE__
     kv = parse_cli(ARGS)
     main(
-        batch_size=cli_get(kv, "batch-size", 2048),
+        batch_size=haskey(kv, "batch-size") ? parse(Int, kv["batch-size"]) : nothing,
         epochs=cli_get(kv, "epochs", 50_000),
         eval_every=cli_get(kv, "eval-every", 200),
         val_batch_size=cli_get(kv, "val-batch-size", 8192),
