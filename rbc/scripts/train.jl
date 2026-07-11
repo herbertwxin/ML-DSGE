@@ -4,6 +4,7 @@ Train the RBC neural-network policy.
 Usage:
     julia --project=. -t auto scripts/train.jl
     julia --project=. -t auto scripts/train.jl --epochs 20000 --batch-size 1024
+    julia --project=. -t auto scripts/train.jl --device gpu   # or cpu; default auto
 
 Writes, under the project root:
     rbc_nn.bson         trained checkpoint (model weights + RBCParams)
@@ -37,8 +38,9 @@ function main(;
     panel_seed::Int=321,
     seed::Int=42,
     checkpoint_path::String=CHECKPOINT_PATH,
+    device::String="auto",
 )
-    solver = NNSolver(RBCParams())
+    solver = NNSolver(RBCParams(); device=select_device(Symbol(device)))
     losses = train!(
         solver;
         batch_size, epochs, eval_every, val_batch_size, patience, min_rel_improve,
@@ -72,5 +74,6 @@ if abspath(PROGRAM_FILE) == @__FILE__
         panel_seed=cli_get(kv, "panel-seed", 321),
         seed=cli_get(kv, "seed", 42),
         checkpoint_path=cli_get(kv, "checkpoint", CHECKPOINT_PATH),
+        device=cli_get(kv, "device", "auto"),
     )
 end

@@ -228,7 +228,8 @@ julia --project=. -t auto scripts/train.jl
 Flags: `--batch-size 2048`, `--epochs 50000`, `--eval-every 200`,
 `--val-batch-size 8192`, `--patience 20`, `--min-rel-improve 5e-3`,
 `--k-oob-weight 1.0`, `--panel-n-cases 4`, `--panel-T 120`,
-`--panel-seed 321`, `--seed 42`, `--checkpoint rbc_nn.bson`.
+`--panel-seed 321`, `--seed 42`, `--checkpoint rbc_nn.bson`,
+`--device auto` (`auto`/`cpu`/`gpu`; see [GPU support](#gpu-support)).
 Writes `rbc_nn.bson` and `learn_rbc_loss.png`.
 
 ### Compare one calibration
@@ -293,6 +294,35 @@ Reading guide:
 
 ---
 
+## GPU support
+
+NN training runs on a GPU when one is available, automatically:
+
+- **Detection.** `FullRBC.jl` loads the platform GPU package at module load if
+  it is installed (Metal.jl on macOS/Apple GPUs, CUDA.jl elsewhere/NVIDIA);
+  `select_device()` then returns the first *functional* backend via Flux's
+  `gpu_device()`, falling back to the CPU. Override per run with
+  `--device auto|cpu|gpu` on `scripts/train.jl` (`gpu` errors if none is
+  functional, instead of silently using the CPU).
+- **Precision.** Training uses Float32 on any GPU (Apple GPUs have no Float64
+  at all; Float32 is also much faster on NVIDIA) and Float64 on the CPU.
+  Batches are always *sampled* on the CPU in Float64 — so draws are
+  reproducible for a given seed regardless of device — then converted and
+  transferred (`to_device`).
+- **What stays on CPU.** Simulation (`NNPolicy` takes a CPU/Float64 copy of
+  the network — pointwise rollouts on a GPU would be slower than the copy),
+  the TI benchmark, and checkpoints: `save_checkpoint` always writes
+  CPU/Float64 `Flux.state`, so checkpoints are interchangeable across
+  devices and identical in format to pre-GPU ones. `load_checkpoint` defaults
+  to the CPU; pass `device=select_device()` to continue training on GPU.
+- **Expectations.** The default network is tiny (4×64), so on an Apple-silicon
+  GPU throughput is roughly on par with the CPU (kernel-launch overhead
+  dominates; ~1.5x at `--batch-size 8192` in a quick local benchmark). GPU
+  pays off with wider networks, larger batches, or a discrete NVIDIA card.
+  Use `--device cpu` if you want bit-identical Float64 training runs.
+
+---
+
 ## Dependencies
 
 - Julia 1.10+ (developed on 1.12)
@@ -302,6 +332,8 @@ Reading guide:
 - `CairoMakie` — all figures
 - `CSV`, `DataFrames`, `JSON` — tabular/metrics outputs
 - `BSON` — checkpoint persistence
+- `Metal` / `CUDA` — optional GPU backends, loaded only on the matching
+  platform (drop the one you don't need with `Pkg.rm`)
 
 All pinned in `Project.toml` / `Manifest.toml`.
 

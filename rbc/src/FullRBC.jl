@@ -25,13 +25,33 @@ using FastGaussQuadrature
 using Interpolations
 using BSON
 
+# Optional GPU backends. Flux's `gpu_device()` only sees a backend whose
+# trigger package is loaded, so load the platform-appropriate one if it is
+# installed: Metal on macOS (Apple GPUs), CUDA elsewhere (NVIDIA). A failure
+# to load is downgraded to a warning — everything then runs on the CPU.
+if Sys.isapple()
+    if Base.find_package("Metal") !== nothing
+        try
+            @eval using Metal
+        catch err
+            @warn "Metal.jl is installed but failed to load; using CPU" err
+        end
+    end
+elseif Base.find_package("CUDA") !== nothing
+    try
+        @eval using CUDA
+    catch err
+        @warn "CUDA.jl is installed but failed to load; using CPU" err
+    end
+end
+
 export RBCParams, steady_state, steady_state_batch, steady_state_share,
        a_support_from_shock_params, k_support, Quadrature,
        production, resources, gross_return, marginal_utility, next_productivity,
        sample_params_uniform, with_calibration, params_to_dict, params_from_dict,
        TISolver, TIPolicy, solve,
        NNSolver, NNPolicy, sample_batch, compute_residuals, euler_terms, euler_loss, train!,
-       save_checkpoint, load_checkpoint,
+       save_checkpoint, load_checkpoint, select_device,
        consumption_share, simulate,
        gap_metrics, build_validation_panel, evaluate_validation_panel
 
