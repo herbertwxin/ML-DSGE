@@ -322,21 +322,29 @@ NN training runs on a GPU when one is available, automatically:
   Use `--device cpu` if you want bit-identical Float64 training runs.
 
 **Troubleshooting: "No functional GPU backend found! Defaulting to CPU" on an
-NVIDIA machine.** CUDA.jl loaded but `CUDA.functional()` is `false`; with
-`--device auto` training silently continues on the CPU (run with
-`--device gpu` to fail loudly instead). Check, in order:
+NVIDIA machine.** With `--device auto` training silently continues on the CPU
+(run with `--device gpu` to fail loudly instead). Check, in order:
 
 1. `nvidia-smi` inside the container/machine — if it fails, the GPU is not
    visible (e.g. the container is missing `docker run --gpus all`); nothing
    in Julia can fix that.
-2. If the precompile log showed `Failure artifact: CUDA_Runtime` and/or
+2. **`Pkg.add("cuDNN")` — required, not optional.** Flux's `gpu_device()`
+   (MLDataDevices) only reports the CUDA backend as available when *both*
+   CUDA.jl and cuDNN.jl are loaded, even though this Dense-only model never
+   calls a cuDNN kernel. Without cuDNN you get the confusing state where
+   `CUDA.functional()` is `true` but `gpu_device()` still returns the CPU
+   (observed on a RunPod NVIDIA pod). `FullRBC.jl` picks cuDNN up
+   automatically once it is installed.
+3. If the precompile log showed `Failure artifact: CUDA_Runtime` and/or
    warnings about runtime libraries "loaded from a system path"
    (`LD_LIBRARY_PATH` contains `/usr/local/cuda/lib64`), point CUDA.jl at the
    system toolkit instead of its downloadable artifact:
    `julia --project=. -e 'using CUDA; CUDA.set_runtime_version!(local_toolkit=true)'`
    then restart Julia.
-3. Optional: `Pkg.add("cuDNN")` silences Flux's cuDNN warning (cuDNN itself is
-   not needed by this Dense-only model).
+
+Verify with
+`julia --project=. -e 'using CUDA, cuDNN, Flux; @show CUDA.functional() gpu_device()'` —
+it should print `CUDADevice(...)`, not `CPUDevice`.
 
 ---
 
