@@ -1,6 +1,5 @@
 # Generated artifacts (mirrors full-rbc/.gitignore intent: keep the repo free
-# of large/binary outputs that anyone can regenerate with the scripts).
-rbc_nn.bson
+# of large/binary outputs that anyone can regenerate with the scripts)
 rbc_comparison.png
 rbc_paths.csv
 rbc_metrics.json
