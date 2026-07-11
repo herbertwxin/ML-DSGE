@@ -40,6 +40,9 @@ if Sys.isapple()
 elseif Base.find_package("CUDA") !== nothing
     try
         @eval using CUDA
+        # cuDNN is only needed for conv/batchnorm kernels (not this model),
+        # but loading it when installed silences Flux's FluxCUDAExt warning.
+        Base.find_package("cuDNN") === nothing || @eval using cuDNN
     catch err
         @warn "CUDA.jl is installed but failed to load; using CPU" err
     end

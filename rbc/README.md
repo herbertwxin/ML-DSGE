@@ -321,6 +321,23 @@ NN training runs on a GPU when one is available, automatically:
   pays off with wider networks, larger batches, or a discrete NVIDIA card.
   Use `--device cpu` if you want bit-identical Float64 training runs.
 
+**Troubleshooting: "No functional GPU backend found! Defaulting to CPU" on an
+NVIDIA machine.** CUDA.jl loaded but `CUDA.functional()` is `false`; with
+`--device auto` training silently continues on the CPU (run with
+`--device gpu` to fail loudly instead). Check, in order:
+
+1. `nvidia-smi` inside the container/machine — if it fails, the GPU is not
+   visible (e.g. the container is missing `docker run --gpus all`); nothing
+   in Julia can fix that.
+2. If the precompile log showed `Failure artifact: CUDA_Runtime` and/or
+   warnings about runtime libraries "loaded from a system path"
+   (`LD_LIBRARY_PATH` contains `/usr/local/cuda/lib64`), point CUDA.jl at the
+   system toolkit instead of its downloadable artifact:
+   `julia --project=. -e 'using CUDA; CUDA.set_runtime_version!(local_toolkit=true)'`
+   then restart Julia.
+3. Optional: `Pkg.add("cuDNN")` silences Flux's cuDNN warning (cuDNN itself is
+   not needed by this Dense-only model).
+
 ---
 
 ## Dependencies
