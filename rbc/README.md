@@ -9,13 +9,6 @@ A stochastic RBC model solved two ways and compared head-to-head:
   iteration (exact per-node Euler solve + cubic-spline policy) at a single
   calibration.
 
-This started as a port of the Python [`full-rbc`](../full-rbc) package but is
-now a native Julia design rather than a line-by-line translation: immutable
-typed solvers, a small policy interface shared by both solution methods
-through multiple dispatch, one simulation loop for everything, and
-[Makie](https://makie.org) figures. The economics and the diagnostics are
-unchanged, so results remain directly comparable with the Python version.
-
 ---
 
 ## Repository layout
@@ -222,7 +215,7 @@ so every parameter draw contributes on a comparable, dimensionless scale.
 
 ## Workflow
 
-All commands assume you're in `full-rbc-julia/`. Instantiate once:
+All commands assume you're in `rbc/`. Instantiate once:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
