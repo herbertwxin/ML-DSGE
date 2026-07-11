@@ -1,14 +1,4 @@
-# Time Iteration benchmark: Coleman operator with an exact per-node Euler solve.
-#
-# Earlier versions of this file (and the Python original, `rbc_TimeIter.py`)
-# used naive successive approximation: evaluate the Euler right-hand side at
-# the next-period capital implied by the *previous* policy, invert marginal
-# utility, and damp. That map is not a contraction — for calibrations near the
-# training-bound edges (high beta, low delta, high rho) it oscillated below
-# tolerance forever, and for volatile draws it collapsed to a spurious
-# `c ≈ 0` fixed point. See README "Fix applied: proper Coleman time iteration".
-#
-# The rewrite applies the textbook Coleman operator: at every grid node,
+# Coleman operator: at every grid node,
 # *solve* the Euler equation
 #
 #     u'(c) = beta * E[ u'(c'(k', A')) * R(k', A') ],   k' = resources - c
@@ -93,6 +83,7 @@ Run Coleman time iteration to a fixed point of the consumption-share policy.
 `tol` is the sup-norm of the share update (shares are O(0.1–0.5), so `1e-7`
 is a relative accuracy of ~1e-6). Returns a [`TIPolicy`](@ref); check
 `.converged` when running near the edges of the parameter box.
+The policy is initialized to the steady-state share.
 """
 function solve(ti::TISolver; tol::Float64=1e-7, max_iter::Int=2000,
                frac_floor::Float64=1e-6, verbose::Bool=false)

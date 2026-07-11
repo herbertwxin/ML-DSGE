@@ -29,8 +29,7 @@ end
     NNSolver(p::RBCParams; lr=5e-4)
 
 Policy network + optimizer state + quadrature for the Euler expectation.
-The `RBCParams` carries both the reference calibration and the structural
-bounds the network is trained over.
+The `RBCParams` carries both the reference calibration and the structural bounds the network is trained over.
 """
 struct NNSolver{M<:Chain,O}
     p::RBCParams

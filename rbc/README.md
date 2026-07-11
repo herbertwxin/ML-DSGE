@@ -2,12 +2,10 @@
 
 A stochastic RBC model solved two ways and compared head-to-head:
 
-- **Neural solver** (`src/neural_solver.jl`) — a policy network trained on the
-  normalized Euler-equation residual over a whole box of structural
+- **Neural solver** (`src/neural_solver.jl`) — a policy network trained on the normalized Euler-equation residual over a whole box of structural
   parameters.
 - **Time Iteration benchmark** (`src/time_iteration.jl`) — Coleman time
-  iteration (exact per-node Euler solve + cubic-spline policy) at a single
-  calibration.
+  iteration (exact per-node Euler solve + cubic-spline policy) at a single calibration. Solved using bisection. 
 
 ---
 
