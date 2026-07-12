@@ -36,9 +36,9 @@ Base.@kwdef struct RBCParams
     gamma_bounds::Tuple{Float64,Float64} = (0.5, 4.0)
     sigma_eps_bounds::Tuple{Float64,Float64} = (0.005, 0.05)
 
-    # Oversampling of the "hard region" (high beta, low delta) in training
-    # batches. Off by default.
-    hard_region_prob::Float64 = 0.3
+    # Oversampling of hard parameter corners in training batches: high beta,
+    # low delta, and gamma near either edge of its normalized range.
+    hard_region_prob::Float64 = 0.5
     hard_beta_low_norm::Float64 = 0.85
     hard_delta_high_norm::Float64 = 0.20
 end

@@ -148,21 +148,29 @@ simulate(solver::NNSolver, p::RBCParams; kwargs...) = simulate(NNPolicy(solver, 
 """
     sample_batch(p::RBCParams, rng, batch_size)
 
-Draw a Float32 training batch uniformly over the normalized state × parameter
-box. Returns the `8 × batch_size` network input matrix plus the physical
-states, structural parameters, and per-sample `(k, A)` support needed to
-evaluate the Euler residual. Sampling happens on the CPU (reproducible for a
-given `rng`); move the batch with `device(batch)`.
+Draw a Float32 training batch over the normalized state × parameter box. Most
+draws are uniform; with probability `p.hard_region_prob`, a column instead
+uses high beta, low delta, and gamma sampled from either edge of its range.
+Returns the `8 × batch_size` network input matrix plus the physical states,
+structural parameters, and per-sample `(k, A)` support needed to evaluate the
+Euler residual. Sampling happens on the CPU (reproducible for a given `rng`);
+move the batch with `device(batch)`.
 """
 function sample_batch(p::RBCParams, rng::AbstractRNG, batch_size::Int)
     # Rows: k, A, alpha, beta, delta, rho, gamma, sigma_eps (all in [0, 1]).
     inputs = rand(rng, Float32, 8, batch_size)
 
     if p.hard_region_prob > 0.0
+        beta_low = Float32(p.hard_beta_low_norm)
+        delta_high = Float32(p.hard_delta_high_norm)
+        gamma_width = 0.20f0  # outer 20% of normalized gamma, split low/high
         for col in axes(inputs, 2)
             if rand(rng) < p.hard_region_prob
-                inputs[4, col] = p.hard_beta_low_norm + (1.0 - p.hard_beta_low_norm) * rand(rng)
-                inputs[5, col] = p.hard_delta_high_norm * rand(rng)
+                inputs[4, col] = beta_low + (1f0 - beta_low) * rand(rng, Float32)
+                inputs[5, col] = delta_high * rand(rng, Float32)
+                inputs[7, col] = rand(rng, Bool) ?
+                    gamma_width * rand(rng, Float32) :
+                    1f0 - gamma_width * rand(rng, Float32)
             end
         end
     end

@@ -279,9 +279,9 @@ Reading guide:
 
 ## Known limitations
 
-- `hard_region_prob = 0.0` by default: the oversampling mechanism for the
-  hard (high `beta`, low `delta`) region exists in `sample_batch` but is
-  inert unless enabled via `RBCParams(hard_region_prob=0.2, ...)`.
+- `sample_batch` oversamples difficult parameter corners according to
+  `hard_region_prob`: high `beta`, low `delta`, and `gamma` drawn from the
+  outer 20% at either edge of its normalized range.
 - The NN's simulated state is intentionally never clamped between periods; a
   state outside the box the network was normalized on extrapolates without a
   restoring force (the sigmoid share keeps it bounded, but not accurate).
