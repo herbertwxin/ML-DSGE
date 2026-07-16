@@ -137,8 +137,7 @@ window.Quarto = {
 <section id="setup" class="level2">
 <h2 class="anchored" data-anchor-id="setup">Setup</h2>
 <p>Both the benchmark and the neural network are based on the Euler equation. The benchmark uses time-iteration solved with bisection. The neural network uses Euler residual + out-of-bound capital penalty in the loss function.</p>
-<p>The set of equations that describes the model is: <span class="math display">\[
-\begin{align}
+<p>The set of equations that describes the model is: <span class="math display">\[\begin{align}
 y &amp;= A k^\alpha\\
 R &amp;= \alpha A k^{\alpha-1} + 1 - \delta\\
 u(c) &amp;= \frac{c^{1-\gamma}}{1-\gamma}\\
@@ -146,9 +145,8 @@ u'(c) &amp;= c^{-\gamma}\\
 u'(c) &amp;= \beta E\left[u'(c'(k', A')) R(k', A')\right] \\
 k' &amp;= A k^\alpha + (1 - \delta) k - c\\
 \log A' &amp;= \rho \log A + \sigma_{\text{eps}} \varepsilon
-\end{align}
-\]</span></p>
-<p>See more details in the <a href="README.md">README</a>.</p>
+\end{align}\]</span></p>
+<p>See more details in the <a href="../README.md">README</a>.</p>
 </section>
 <section id="simulation" class="level2">
 <h2 class="anchored" data-anchor-id="simulation">Simulation</h2>

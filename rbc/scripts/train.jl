@@ -46,7 +46,7 @@ function main(;
     losses = train!(
         solver;
         batch_size, epochs, eval_every, val_batch_size, patience, min_rel_improve,
-        k_oob_weight, panel_n_cases, panel_T, panel_seed,
+        loss_kwargs=(; k_oob_weight), panel_n_cases, panel_T, panel_seed,
         best_checkpoint_path=checkpoint_path, rng=Xoshiro(seed),
     )
 

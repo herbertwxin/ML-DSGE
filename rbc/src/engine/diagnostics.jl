@@ -1,15 +1,16 @@
-# NN-vs-TI comparison metrics, shared by training, compare.jl, and
-# diagnose_divergence.jl.
+# Solver-vs-benchmark comparison metrics. Model-agnostic: works on any two
+# `simulate` results with matching named fields.
 
 """
-    gap_metrics(nn_res, ti_res; series=(:consumption, :capital, :output, :investment))
+    gap_metrics(nn_res, ti_res; series=propertynames(ti_res))
 
 Compare two `simulate` results and return a `Dict{String,Any}` with, per
 series: `rmse`, `max_abs`, `nrmse_vs_ti_std` (`rmse / std(ti)`), and
 `level_ratio` (`mean(nn) / mean(ti)`); plus an `"aggregate"` entry with
-`mean_nrmse` / `max_nrmse` across `series`.
+`mean_nrmse` / `max_nrmse` across `series`. By default all series in
+`ti_res` are compared; pass `series` to restrict.
 """
-function gap_metrics(nn_res, ti_res; series=(:consumption, :capital, :output, :investment))
+function gap_metrics(nn_res, ti_res; series=propertynames(ti_res))
     by_var = Dict{String,Any}()
     nrmses = Float64[]
     for s in series

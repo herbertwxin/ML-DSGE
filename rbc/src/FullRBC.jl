@@ -13,8 +13,16 @@ Both produce policies implementing `consumption_share(policy, k, A)`, so one
 shared [`simulate`](@ref) drives either through identical shock draws for
 like-for-like comparison ([`gap_metrics`](@ref)).
 
-Started as a port of the Python `full-rbc` package; see `README.md` for the
-design and for the fixes applied relative to that version.
+The code is split into a model-agnostic engine (`engine/`: device selection,
+network builder, training loop, checkpointing, metrics) and the RBC model
+(`model.jl`, plus its TI benchmark and simulate loop). The engine reaches the
+economics only through the interface functions in `engine/interface.jl`,
+dispatched on the parameter-struct type — adding a model, or swapping the
+training loss, touches only model files.
+
+Started as a port of the Python `full-rbc` package (now `archive/full-rbc/`);
+see the repository-root `README.md` for the design and for the fixes applied
+relative to that version.
 """
 module FullRBC
 
@@ -54,14 +62,22 @@ export RBCParams, steady_state, steady_state_batch, steady_state_share,
        sample_params_uniform, with_calibration, params_to_dict, params_from_dict,
        TISolver, TIPolicy, solve,
        NNSolver, NNPolicy, sample_batch, compute_residuals, euler_terms, euler_loss, train!,
+       policy_spec, training_loss, validation_report,
        save_checkpoint, load_checkpoint, select_device, is_cpu_device, default_batch_size,
        consumption_share, simulate,
        gap_metrics, build_validation_panel, evaluate_validation_panel
 
+# Model-agnostic engine: nothing in engine/ references the RBC model.
+include("engine/device.jl")
+include("engine/quadrature.jl")
+include("engine/interface.jl")
+include("engine/network.jl")
+include("engine/training.jl")
+include("engine/diagnostics.jl")
+
+# The RBC model: economics + engine-interface implementation + benchmark.
 include("model.jl")
 include("time_iteration.jl")
-include("neural_solver.jl")
 include("simulate.jl")
-include("diagnostics.jl")
 
 end # module
