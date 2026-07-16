@@ -337,10 +337,12 @@ Writes `rbc_nn.bson` (or `rbc_labor_nn.bson`) and `learn_<model>_loss.png`.
 ### Compare one calibration
 
 ```bash
-julia --project=. scripts/compare.jl
+julia --project=. scripts/compare.jl                  # baseline RBC
+julia --project=. scripts/compare.jl --model labor    # RBC with labor choice
 ```
 
-Writes `rbc_comparison.png`, `rbc_paths.csv`, `rbc_metrics.json`. Edit
+Writes `rbc_comparison.png`, `rbc_paths.csv`, `rbc_metrics.json` (labor
+outputs use a `rbc_labor_` prefix and include the hours series). Edit
 `get_calibration_params()` in the script to change the calibration (it must
 lie inside the bounds the checkpoint was trained on).
 
@@ -348,11 +350,22 @@ lie inside the bounds the checkpoint was trained on).
 
 ```bash
 julia --project=. -t auto scripts/diagnose_divergence.jl --n-cases 40 --top-k 5 --T 200
+julia --project=. -t auto scripts/diagnose_divergence.jl --model labor --n-cases 40
 ```
 
-Writes, under `simulation/` (or `--output-dir`), ordered by divergence rank:
-`divergence_summary.csv`, `divergence_top_cases.json`, and per-case
-`divergence_case_XXX_{paths.csv,plot.png}`.
+Writes, under `simulation/` for rbc / `simulation_labor/` for labor (or
+`--output-dir`), ordered by divergence rank: `divergence_summary.csv`,
+`divergence_top_cases.json`, and per-case
+`divergence_case_XXX_{paths.csv,plot.png}`. For the labor model the summary
+gains `nu` and `nrmse_n` (hours) columns and the plots an hours panel.
+
+**Which model am I running?** All three scripts take `--model rbc|labor`
+(default `rbc`) and resolve everything else — checkpoint path, TI benchmark,
+series, parameter columns — from one registry in `scripts/common.jl`. On
+startup they log the model name, the checkpoint path, and the parameter type
+stored *in* that checkpoint, and they **error out if the checkpoint on disk
+belongs to a different model** than `--model` requests (the checkpoint itself
+records its model, so a mismatch cannot run silently).
 
 ### Render the notebook
 

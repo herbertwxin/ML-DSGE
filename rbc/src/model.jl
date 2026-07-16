@@ -139,14 +139,15 @@ function with_calibration(base::RBCParams, structural::NamedTuple)
 end
 
 """
-    params_to_dict(p::RBCParams) -> Dict{String,Any}
+    params_to_dict(p) -> Dict{String,Any}
 
-JSON-friendly representation of `p` (tuples become vectors).
+JSON-friendly representation of any model's parameter struct (tuples become
+vectors).
 """
-function params_to_dict(p::RBCParams)
+function params_to_dict(p)
     return Dict{String,Any}(
         string(f) => (v = getfield(p, f); v isa Tuple ? collect(v) : v)
-        for f in fieldnames(RBCParams)
+        for f in fieldnames(typeof(p))
     )
 end
 

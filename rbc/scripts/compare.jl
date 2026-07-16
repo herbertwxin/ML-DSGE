@@ -2,11 +2,15 @@
 Single-calibration NN vs TI comparison.
 
 Usage:
-    julia --project=. scripts/compare.jl
+    julia --project=. scripts/compare.jl                  # baseline RBC
+    julia --project=. scripts/compare.jl --model labor    # RBC with labor choice
 
-Requires a trained checkpoint at `rbc_nn.bson` (run `scripts/train.jl` first).
+Requires the model's trained checkpoint (`rbc_nn.bson` / `rbc_labor_nn.bson`,
+override with `--checkpoint`; run `scripts/train.jl --model <name>` first).
+The script errors if the checkpoint belongs to a different model and logs the
+model actually in use.
 
-Writes, under the project root:
+Writes, under the project root (labor outputs carry a `rbc_labor_` prefix):
     rbc_comparison.png
     rbc_paths.csv
     rbc_metrics.json
@@ -23,34 +27,41 @@ const SIM_SEED = 42
 """
 Calibration used for the comparison (TI solve + both simulations). Edit to
 compare a different one; it must lie inside the bounds the checkpoint was
-trained on (see `RBCParams` `*_bounds` fields).
+trained on (see the params struct's `*_bounds` fields).
 """
-get_calibration_params() = RBCParams(alpha=0.30, beta=0.98, delta=0.08, rho=0.88, gamma=3.0, sigma_eps=0.02)
+get_calibration_params(model::String) =
+    model == "rbc" ?
+        RBCParams(alpha=0.30, beta=0.98, delta=0.08, rho=0.88, gamma=3.0, sigma_eps=0.02) :
+        RBCLaborParams(alpha=0.30, beta=0.98, delta=0.08, rho=0.88, gamma=3.0, sigma_eps=0.02, nu=1.2)
 
 function run_comparison(;
-    params::RBCParams=get_calibration_params(),
-    plot_file::String="rbc_comparison.png",
-    paths_file::String="rbc_paths.csv",
-    metrics_file::String="rbc_metrics.json",
+    model::String="rbc",
+    params=get_calibration_params(model),
+    checkpoint::Union{Nothing,String}=nothing,
 )
-    nn_solver = load_nn_solver()
-    ti_policy = solve(TISolver(params); verbose=true)
+    spec = model_spec(model)
+    prefix = model == "rbc" ? "rbc" : "rbc_$model"
+
+    nn_solver = load_nn_solver(spec; checkpoint)
+    ti_policy = solve(spec.benchmark(params); verbose=true)
     ti_policy.converged || @warn "TI benchmark did not converge; metrics may be unreliable"
 
     nn_res = simulate(nn_solver, params; T=T_SIM, rng=Xoshiro(SIM_SEED))
     ti_res = simulate(ti_policy; T=T_SIM, rng=Xoshiro(SIM_SEED))
 
-    plot_path = joinpath(ROOT, plot_file)
-    save(plot_path, comparison_figure(nn_res, ti_res; params))
+    plot_path = joinpath(ROOT, "$(prefix)_comparison.png")
+    save(plot_path, comparison_figure(nn_res, ti_res; params, series=spec.series))
     @info "Saved comparison figure" plot_path
 
-    paths_path = save_path_table(nn_res, ti_res, joinpath(ROOT, paths_file))
+    paths_path = save_path_table(nn_res, ti_res, joinpath(ROOT, "$(prefix)_paths.csv");
+                                 series=spec.series)
     @info "Saved NN/TI paths" paths_path
 
-    metrics = gap_metrics(nn_res, ti_res; series=SERIES)
-    metrics_path = joinpath(ROOT, metrics_file)
+    metrics = gap_metrics(nn_res, ti_res; series=spec.series)
+    metrics_path = joinpath(ROOT, "$(prefix)_metrics.json")
     open(metrics_path, "w") do io
-        JSON.print(io, Dict("params" => params_to_dict(params), "metrics" => metrics), 2)
+        JSON.print(io, Dict("model" => spec.name, "params" => params_to_dict(params),
+                            "metrics" => metrics), 2)
     end
     @info "Saved NN/TI gap metrics" metrics_path
 
@@ -58,5 +69,9 @@ function run_comparison(;
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    run_comparison()
+    kv = parse_cli(ARGS)
+    run_comparison(
+        model=cli_get(kv, "model", "rbc"),
+        checkpoint=haskey(kv, "checkpoint") ? kv["checkpoint"] : nothing,
+    )
 end

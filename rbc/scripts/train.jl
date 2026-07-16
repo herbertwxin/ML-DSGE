@@ -43,12 +43,10 @@ function main(;
     checkpoint_path::Union{Nothing,String}=nothing,
     device::String="auto",
 )
-    params = model == "rbc"   ? RBCParams() :
-             model == "labor" ? RBCLaborParams() :
-             error("Unknown --model '$model' (use rbc or labor)")
+    spec = model_spec(model)
+    params = spec.params()
     loss_kwargs = model == "labor" ? (; k_oob_weight, intra_weight) : (; k_oob_weight)
-    checkpoint_path = something(checkpoint_path,
-        model == "rbc" ? CHECKPOINT_PATH : joinpath(ROOT, "rbc_labor_nn.bson"))
+    checkpoint_path = something(checkpoint_path, joinpath(ROOT, spec.default_checkpoint))
 
     solver = NNSolver(params; device=select_device(Symbol(device)))
     batch_size = something(batch_size, default_batch_size(solver.device))
