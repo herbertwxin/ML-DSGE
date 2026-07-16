@@ -12,3 +12,5 @@
 1. Add Euler residual test for NN and TI at each simulation.
 2. Study parameter drift with NN
 3. Testing against state-support (widen the support, remove the penalty, check Euler residual)
+4. Create single simulation kit for easy demo.
+5. Verify Jesus's double descent phenomenon with our setup.
