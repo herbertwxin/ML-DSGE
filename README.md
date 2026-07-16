@@ -52,11 +52,14 @@ ML-DSGE/
 │   │   │   ├── network.jl           # policy-net builder + NNSolver container
 │   │   │   ├── training.jl          # train! loop, early stopping, checkpoints
 │   │   │   └── diagnostics.jl       # solver-vs-benchmark gap metrics
-│   │   ├── model.jl                 # THE RBC MODEL: params, primitives, steady state,
+│   │   ├── model.jl                 # BASELINE RBC MODEL: params, primitives, steady state,
 │   │   │                            #   sample_batch, Euler residuals + training loss,
 │   │   │                            #   NNPolicy, NN-vs-TI validation panel
-│   │   ├── time_iteration.jl        # TISolver/TIPolicy: Coleman time iteration
-│   │   └── simulate.jl              # one simulate() shared by every policy type
+│   │   ├── time_iteration.jl        # TISolver/TIPolicy: Coleman time iteration (baseline)
+│   │   ├── simulate.jl              # one simulate() shared by every baseline policy
+│   │   └── model_alter.jl           # SECOND MODEL, self-contained: RBC with labor choice
+│   │                                #   (two-output policy, Euler + intratemporal loss,
+│   │                                #   labor TI benchmark, simulate, panel)
 │   ├── scripts/
 │   │   ├── common.jl                # shared CLI/IO/Makie-figure helpers
 │   │   ├── train.jl                 # train the NN checkpoint
@@ -92,6 +95,41 @@ A model is a parameter struct (structural scalars + training bounds, like
 Loss hyperparameters (e.g. `k_oob_weight`) travel through `train!` as an
 opaque `loss_kwargs` named tuple, so changing the loss — reweighting terms,
 adding penalties, new equilibrium conditions — only ever edits `model.jl`.
+
+### Second model: RBC with labor choice (`rbc/src/model_alter.jl`)
+
+The first instantiation of the interface beyond the baseline, self-contained
+in one file. Preferences are CRRA in consumption plus separable isoelastic
+labor disutility,
+
+```text
+u(c, n) = c^(1-gamma)/(1-gamma) - chi * n^(1+1/nu)/(1+1/nu),   y = A k^alpha n^(1-alpha)
+```
+
+so the policy has **two controls** `(consumption share, hours)` — a 9-input /
+2-output network (`RBCLaborParams` adds the Frisch elasticity `nu` to the
+sampled parameter box) — and the training loss stacks **two normalized
+residuals** plus the over-saving penalty:
+
+```text
+loss = mse(euler) + intra_weight * mse(intratemporal) + k_oob_weight * mean(k_oob)
+euler          = (beta E[c'^(-gamma) R'] - c^(-gamma)) / c^(-gamma)
+intratemporal  = (c^(-gamma) w - chi n^(1/nu)) / (chi n^(1/nu)),  w = (1-alpha) A k^alpha n^(-alpha)
+```
+
+`chi` is never sampled: it is pinned per calibration so steady-state hours
+equal `n_ss_target` (default 1/3), which keeps the steady state analytic
+(`kappa = k/n` from the Euler equation, `k_ss = kappa * n_ss`) and the
+`k`-box normalization intact. No engine file changed to add this model.
+
+The labor TI benchmark (`LaborTISolver`, same file) stays a **1-D bisection**
+per node: with isoelastic disutility and Cobb-Douglas production the
+intratemporal condition gives hours in closed form given consumption,
+`n(c) = ((1-alpha) A k^alpha c^(-gamma) / chi)^(nu/(1+alpha*nu))`, so the
+Coleman node solve only searches over `c`. Verified: converges in ~40 sweeps
+at the default calibration (187 at the hard high-`beta`/low-`delta` corner),
+and the converged policy at `(k_ss, A=1)` reproduces the analytic steady
+state to 4 decimal places.
 
 ---
 
@@ -283,15 +321,18 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ### Train
 
 ```bash
-julia --project=. -t auto scripts/train.jl
+julia --project=. -t auto scripts/train.jl                  # baseline RBC
+julia --project=. -t auto scripts/train.jl --model labor    # RBC with labor choice
 ```
 
-Flags: `--batch-size` (default: 2048 on CPU, 32768 on GPU), `--epochs 50000`, `--eval-every 200`,
+Flags: `--model rbc|labor`, `--batch-size` (default: 2048 on CPU, 32768 on GPU),
+`--epochs 50000`, `--eval-every 200`,
 `--val-batch-size 8192`, `--patience 20`, `--min-rel-improve 5e-3`,
-`--k-oob-weight 1.0`, `--panel-n-cases 4`, `--panel-T 120`,
-`--panel-seed 321`, `--seed 42`, `--checkpoint rbc_nn.bson`,
+`--k-oob-weight 1.0`, `--intra-weight 1.0` (labor model only),
+`--panel-n-cases 4`, `--panel-T 120`,
+`--panel-seed 321`, `--seed 42`, `--checkpoint <path>`,
 `--device auto` (`auto`/`cpu`/`gpu`; see [GPU support](#gpu-support)).
-Writes `rbc_nn.bson` and `learn_rbc_loss.png`.
+Writes `rbc_nn.bson` (or `rbc_labor_nn.bson`) and `learn_<model>_loss.png`.
 
 ### Compare one calibration
 
@@ -509,8 +550,10 @@ over-saving fixes documented above were applied in the Julia version and are
 - [x] Isolate the model-agnostic training engine (`rbc/src/engine/`) from the
   model-specific code (`rbc/src/model.jl`) so the loss/model can be swapped
   without touching the engine.
-- [ ] Add a second model on the engine (RBC with labor/leisure choice:
-  two-output policy, intratemporal FOC in the loss).
+- [x] Add a second model on the engine (RBC with labor/leisure choice:
+  two-output policy, intratemporal FOC in the loss) — `rbc/src/model_alter.jl`;
+  train with `scripts/train.jl --model labor`. A full training run has not
+  been launched yet (only a 2k-epoch smoke run).
 - [ ] Extend to richer DSGE settings (NK with Rotemberg pricing and a ZLB;
   heterogeneous agents will need a separate engine variant).
 - [ ] Introduce rollout-aware training terms for long-horizon dynamic consistency.

@@ -103,20 +103,6 @@ function steady_state_share(p::RBCParams)
     return ss.c / resources(ss.k, ss.A, p.alpha, p.delta)
 end
 
-"""
-    a_support_from_shock_params(rho, sigma_eps, a_sigma_mult, a_ss=1.0)
-
-Productivity support `[A_low, A_high] = exp(±a_sigma_mult * sigma_stat) * a_ss`
-with `sigma_stat = sigma_eps / sqrt(1 - rho^2)`. Shared by the NN state
-normalization and the TI grid so both solvers see the same box.
-"""
-function a_support_from_shock_params(rho::Real, sigma_eps::Real, a_sigma_mult::Real, a_ss::Real=1.0)
-    sigma_stat = sigma_eps / sqrt(max(1e-4, 1.0 - rho^2))
-    w = a_sigma_mult * sigma_stat
-    a_low = exp(-w) * a_ss
-    return a_low, max(exp(w) * a_ss, a_low + 1e-6)
-end
-
 "Capital support `(k_low, k_high) = k_bounds .* k_ss(A=1)` for calibration `p`."
 function k_support(p::RBCParams)
     k_ss, _, _ = steady_state_batch(p.alpha, p.beta, p.delta)

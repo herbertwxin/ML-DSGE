@@ -1,17 +1,19 @@
 """
     FullRBC
 
-Stochastic RBC model solved two ways:
+Stochastic RBC models solved by neural networks against Coleman time-iteration
+benchmarks. Two models share one training engine:
 
-- [`NNSolver`](@ref): a neural-network consumption-share policy trained on the
-  normalized Euler-equation residual over a whole box of structural
-  parameters, and
-- [`TISolver`](@ref)/[`solve`](@ref): a Coleman time-iteration benchmark
-  (exact per-node Euler solve + cubic-spline policy) at a single calibration.
+- [`RBCParams`](@ref) — the baseline model: consumption-share policy trained
+  on the normalized Euler residual ([`NNSolver`](@ref)) vs [`TISolver`](@ref).
+- [`RBCLaborParams`](@ref) — RBC with endogenous labor (CRRA + separable
+  isoelastic disutility): two-output policy `(share, hours)` trained on the
+  Euler *and* intratemporal residuals, vs [`LaborTISolver`](@ref).
 
-Both produce policies implementing `consumption_share(policy, k, A)`, so one
-shared [`simulate`](@ref) drives either through identical shock draws for
-like-for-like comparison ([`gap_metrics`](@ref)).
+Within a model, NN and TI policies implement one query interface
+(`consumption_share` / `controls`), so a shared [`simulate`](@ref) drives
+either through identical shock draws for like-for-like comparison
+([`gap_metrics`](@ref)).
 
 The code is split into a model-agnostic engine (`engine/`: device selection,
 network builder, training loop, checkpointing, metrics) and the RBC model
@@ -65,7 +67,9 @@ export RBCParams, steady_state, steady_state_batch, steady_state_share,
        policy_spec, training_loss, validation_report,
        save_checkpoint, load_checkpoint, select_device, is_cpu_device, default_batch_size,
        consumption_share, simulate,
-       gap_metrics, build_validation_panel, evaluate_validation_panel
+       gap_metrics, build_validation_panel, evaluate_validation_panel,
+       RBCLaborParams, LaborTISolver, LaborTIPolicy, NNLaborPolicy, controls,
+       labor_terms, labor_loss
 
 # Model-agnostic engine: nothing in engine/ references the RBC model.
 include("engine/device.jl")
@@ -79,5 +83,9 @@ include("engine/diagnostics.jl")
 include("model.jl")
 include("time_iteration.jl")
 include("simulate.jl")
+
+# Second model on the same engine: RBC with endogenous labor (CRRA + separable
+# isoelastic labor disutility), self-contained in one file.
+include("model_alter.jl")
 
 end # module
