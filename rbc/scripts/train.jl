@@ -35,7 +35,6 @@ function main(;
     patience::Int=20,
     min_rel_improve::Float64=5e-3,
     k_oob_weight::Float64=1.0,
-    intra_weight::Float64=1.0,                # labor model only
     panel_n_cases::Int=4,
     panel_T::Int=120,
     panel_seed::Int=321,
@@ -45,7 +44,7 @@ function main(;
 )
     spec = model_spec(model)
     params = spec.params()
-    loss_kwargs = model == "labor" ? (; k_oob_weight, intra_weight) : (; k_oob_weight)
+    loss_kwargs = (; k_oob_weight)
     checkpoint_path = something(checkpoint_path, joinpath(ROOT, spec.default_checkpoint))
 
     solver = NNSolver(params; device=select_device(Symbol(device)))
@@ -81,7 +80,6 @@ if abspath(PROGRAM_FILE) == @__FILE__
         patience=cli_get(kv, "patience", 20),
         min_rel_improve=cli_get(kv, "min-rel-improve", 5e-3),
         k_oob_weight=cli_get(kv, "k-oob-weight", 1.0),
-        intra_weight=cli_get(kv, "intra-weight", 1.0),
         panel_n_cases=cli_get(kv, "panel-n-cases", 4),
         panel_T=cli_get(kv, "panel-T", 120),
         panel_seed=cli_get(kv, "panel-seed", 321),

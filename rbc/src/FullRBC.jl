@@ -7,8 +7,9 @@ benchmarks. Two models share one training engine:
 - [`RBCParams`](@ref) — the baseline model: consumption-share policy trained
   on the normalized Euler residual ([`NNSolver`](@ref)) vs [`TISolver`](@ref).
 - [`RBCLaborParams`](@ref) — RBC with endogenous labor (CRRA + separable
-  isoelastic disutility): two-output policy `(share, hours)` trained on the
-  Euler *and* intratemporal residuals, vs [`LaborTISolver`](@ref).
+  isoelastic disutility): an hours policy trained on the substituted Euler
+  residual (the intratemporal condition is imposed exactly, pinning
+  consumption in closed form), vs [`LaborTISolver`](@ref).
 
 Within a model, NN and TI policies implement one query interface
 (`consumption_share` / `controls`), so a shared [`simulate`](@ref) drives

@@ -7,11 +7,26 @@
 #     u(c, n) = c^(1-gamma)/(1-gamma) - chi * n^(1+1/nu)/(1+1/nu)
 #
 # Technology: y = A k^alpha n^(1-alpha);  resources = y + (1-delta) k.
-# Two optimality conditions define the policy (frac, n) with c = frac * res:
+# Two optimality conditions:
 #
 #   intratemporal:  chi n^(1/nu) = c^(-gamma) (1-alpha) A k^alpha n^(-alpha)
 #   Euler:          c^(-gamma)   = beta E[c'^(-gamma) R'],
 #                   R' = alpha A' k'^(alpha-1) n'^(1-alpha) + 1 - delta
+#
+# SUBSTITUTED FORMULATION (see comment/some_math.tm): the intratemporal
+# condition is a bijection between c and n given (k, A) — imposing it
+# exactly and substituting into the Euler equation leaves ONE functional
+# equation in one control. The network outputs hours n (naturally bounded in
+# (0, 1)), consumption follows in closed form,
+#
+#     c(n) = ((1-alpha) A k^alpha / (chi n^(alpha + 1/nu)))^(1/gamma),
+#
+# and the training loss is the single substituted Euler residual plus the
+# over-saving penalty (the FOCs are first-order only; transversality still
+# needs the state box to be invariant). The TI benchmark solves the same
+# substituted equation from the other direction — a bisection on c with
+# n(c) = ((1-alpha) A k^alpha c^(-gamma) / chi)^(nu/(1 + alpha nu)) — so
+# both solvers discretize the identical one-dimensional problem.
 #
 # `nu` (Frisch elasticity) is a sampled structural parameter; `chi` is NOT —
 # it is pinned per calibration so steady-state hours equal `n_ss_target`
@@ -19,12 +34,6 @@
 # with kappa = k/n = ((1/beta - (1-delta))/alpha)^(1/(alpha-1)) from the
 # Euler equation, k_ss = kappa * n_ss and chi follows from the intratemporal
 # condition at the steady state.
-#
-# The intratemporal condition solves for hours IN CLOSED FORM given c,
-#
-#     n(c) = ((1-alpha) A k^alpha c^(-gamma) / chi)^(nu / (1 + alpha nu)),
-#
-# so the TI benchmark's Coleman node solve remains a 1-D bisection on c.
 
 """
     RBCLaborParams
@@ -135,17 +144,16 @@ end
 """
     policy_spec(p::RBCLaborParams)
 
-Two-output policy network: a normalized 9-vector
-`(k, A, alpha, beta, delta, rho, gamma, sigma_eps, nu)` in, and
-`(consumption share, hours)` — both in `(0, 1)` via sigmoid — out. Output
-biases pre-set so the untrained policy starts at the steady state
-`(frac_ss, n_ss_target)`.
+Single-output policy network: a normalized 9-vector
+`(k, A, alpha, beta, delta, rho, gamma, sigma_eps, nu)` in, hours
+`n in (0, 1)` (sigmoid) out — consumption is not learned, it follows from
+the intratemporal condition in closed form (see the header). Output bias
+pre-set so the untrained policy starts at `n_ss_target`.
 """
 function policy_spec(p::RBCLaborParams)
-    frac_ss = steady_state_share(p)
     n_ss = p.n_ss_target
-    return (input_dim=9, hidden=[64, 64, 64, 64], output_dim=2,
-            output_bias=[log(frac_ss / (1 - frac_ss)), log(n_ss / (1 - n_ss))])
+    return (input_dim=9, hidden=[64, 64, 64, 64], output_dim=1,
+            output_bias=log(n_ss / (1 - n_ss)))
 end
 
 """
@@ -204,40 +212,44 @@ function sample_batch(p::RBCLaborParams, rng::AbstractRNG, batch_size::Int)
 end
 
 """
-    labor_terms(model, batch, quad::Quadrature) -> (euler, intra, k_oob)
+    labor_terms(model, batch, quad::Quadrature) -> (euler, k_oob)
 
-Per-sample ingredients of the two-condition training loss:
+Per-sample ingredients of the substituted training loss. The network's hours
+output is floored at 0.01 (1% of the time endowment): `c(n)` blows up as
+`n -> 0`, and the floor keeps the Float32 powers finite without restricting
+any economically relevant policy.
 
-- `euler`: normalized Euler residual `(beta E[u_c' R'] - u_c) / u_c` with
-  `R' = alpha A' k'^(alpha-1) n'^(1-alpha) + 1 - delta`, expectations by
-  Gauss-Hermite quadrature with all nodes through the network in one call
-  (same fat-matmul layout as the baseline model, 9×(B*Q) input, 2-row output).
-- `intra`: normalized intratemporal residual
-  `(u_c * w - chi n^(1/nu)) / (chi n^(1/nu))` with
-  `w = (1-alpha) A k^alpha n^(-alpha)` — dimensionless, so both conditions
-  contribute on comparable scales across the parameter box.
+- `euler`: normalized substituted Euler residual
+  `(beta E[u_c' R'] - u_c) / u_c`, where consumption today AND at every
+  quadrature node tomorrow comes from the intratemporal condition
+  `c = ((1-alpha) A k^alpha / (chi n^(alpha+1/nu)))^(1/gamma)` — the
+  intratemporal condition holds exactly by construction, so it contributes
+  no residual. Expectations by Gauss-Hermite quadrature with all nodes
+  through the network in one call (9×(B*Q) input, one output row).
+
+  Feasibility cap: `c` is capped at `0.99 * resources`. Without it, hours
+  choices whose intratemporal-consistent consumption exceeds resources send
+  `k'` to the clamp floor and `1/u_c` to extreme values, blowing up the
+  normalized residual (observed ~1e12 at random init). The cap keeps `k'`
+  bounded away from zero, binds only for infeasible off-equilibrium
+  policies, and is inactive at the solution — where the intratemporal
+  condition therefore holds exactly.
 - `k_oob`: over-saving penalty on normalized `k'` outside `[0, 1]`, identical
-  in role to the baseline model (the Euler + intratemporal pair is still only
-  first-order; transversality needs the box to be invariant).
+  in role to the baseline model. It also disciplines infeasible hours: too
+  little labor makes capped consumption pin `k'` at `0.01 * resources`,
+  which lies below the capital box.
 """
 function labor_terms(model, batch, quad::Quadrature)
     (; inputs, k, A, k_low, k_high, A_low, A_high,
        alpha, beta, delta, rho, gamma, sigma_eps, nu, chi) = batch
 
-    out = model(inputs)                       # 2×B: consumption share, hours
-    frac = out[1, :]
-    n = max.(out[2, :], 1f-4)                 # guard sigmoid underflow (n^(-alpha))
+    n = max.(vec(model(inputs)), 1f-2)        # hours; c(n) explodes as n -> 0
 
-    y = @. A * k^alpha * n^(1 - alpha)
-    res = @. y + (1 - delta) * k
-    c = max.(frac .* res, 1f-6)
+    res = @. A * k^alpha * n^(1 - alpha) + (1 - delta) * k
+    c = min.((@. ((1 - alpha) * A * k^alpha / (chi * n^(alpha + 1 / nu)))^(1 / gamma)),
+             0.99f0 .* res)
     k1 = max.(res .- c, 1f-8)
     mu = c .^ (-gamma)
-
-    # Intratemporal condition at today's states.
-    wage = @. (1 - alpha) * A * k^alpha * n^(-alpha)
-    disutil = @. chi * n^(1 / nu)
-    intra = @. (mu * wage - disutil) / disutil
 
     k1_norm = normalize01(k1, k_low, k_high)
     logA = log.(A)
@@ -256,46 +268,41 @@ function labor_terms(model, batch, quad::Quadrature)
     k1_rep = k1_norm .* onesrow
     inputs1 = vcat(reshape(k1_rep, 1, :), reshape(A1_norm, 1, :),
                    repeat(theta_rows, 1, Q))                # 9×(B*Q)
-    out1 = model(inputs1)                                   # 2×(B*Q)
-    frac1 = reshape(out1[1, :], :, Q)                       # B×Q
-    n1 = max.(reshape(out1[2, :], :, Q), 1f-4)              # B×Q
-    y1 = @. A1 * k1^alpha * n1^(1 - alpha)
-    res1 = @. y1 + (1 - delta) * k1
-    c1 = max.(frac1 .* res1, 1f-6)
+    n1 = max.(reshape(vec(model(inputs1)), :, Q), 1f-2)     # B×Q
+    res1 = @. A1 * k1^alpha * n1^(1 - alpha) + (1 - delta) * k1
+    c1 = min.((@. ((1 - alpha) * A1 * k1^alpha / (chi * n1^(alpha + 1 / nu)))^(1 / gamma)),
+              0.99f0 .* res1)
     R1 = @. alpha * A1 * k1^(alpha - 1) * n1^(1 - alpha) + (1 - delta)
     rhs = beta .* vec(sum(@.(c1^(-gamma) * R1 * wrow); dims=2))
 
     k_oob = @. max(k1_norm - 1, 0)^2 + max(-k1_norm, 0)^2
-    return (rhs .- mu) ./ mu, intra, k_oob
+    return (rhs .- mu) ./ mu, k_oob
 end
 
 """
-    labor_loss(model, batch, quad; intra_weight=1.0, k_oob_weight=1.0)
+    labor_loss(model, batch, quad; k_oob_weight=1.0)
 
-Training objective: mean squared normalized Euler residual
-+ `intra_weight` × mean squared normalized intratemporal residual
-+ `k_oob_weight` × mean over-saving penalty.
+Training objective: mean squared normalized substituted Euler residual plus
+`k_oob_weight` times the mean over-saving penalty. One equilibrium-condition
+residual only — the intratemporal condition is imposed exactly through
+`c(n)`, so no `intra_weight` exists to tune.
 """
-function labor_loss(model, batch, quad::Quadrature; intra_weight::Real=1.0, k_oob_weight::Real=1.0)
-    euler, intra, k_oob = labor_terms(model, batch, quad)
-    return mean(abs2, euler) + Float32(intra_weight) * mean(abs2, intra) +
-           Float32(k_oob_weight) * mean(k_oob)
+function labor_loss(model, batch, quad::Quadrature; k_oob_weight::Real=1.0)
+    euler, k_oob = labor_terms(model, batch, quad)
+    return mean(abs2, euler) + Float32(k_oob_weight) * mean(k_oob)
 end
 
 "The labor-model objective handed to the engine; see [`labor_loss`](@ref)."
-training_loss(p::RBCLaborParams, model, batch, quad::Quadrature;
-              intra_weight::Real=1.0, k_oob_weight::Real=1.0) =
-    labor_loss(model, batch, quad; intra_weight, k_oob_weight)
+training_loss(p::RBCLaborParams, model, batch, quad::Quadrature; k_oob_weight::Real=1.0) =
+    labor_loss(model, batch, quad; k_oob_weight)
 
-"Validation components: penalized loss, Euler MSE, intratemporal MSE, penalty."
+"Validation components: penalized loss, substituted-Euler MSE, penalty."
 function validation_report(p::RBCLaborParams, model, batch, quad::Quadrature;
-                           intra_weight::Real=1.0, k_oob_weight::Real=1.0)
-    euler, intra, k_oob = labor_terms(model, batch, quad)
+                           k_oob_weight::Real=1.0)
+    euler, k_oob = labor_terms(model, batch, quad)
     euler_mse = mean(abs2, euler)
-    intra_mse = mean(abs2, intra)
     oob = mean(k_oob)
-    return (loss=euler_mse + intra_weight * intra_mse + k_oob_weight * oob,
-            euler_mse=euler_mse, intra_mse=intra_mse, k_oob=oob)
+    return (loss=euler_mse + k_oob_weight * oob, euler_mse=euler_mse, k_oob=oob)
 end
 
 # ---------------------------------------------------------------------------
@@ -305,11 +312,15 @@ end
 """
     NNLaborPolicy(solver::NNSolver{RBCLaborParams}, p::RBCLaborParams)
 
-The two-output network at one fixed calibration, queried pointwise with
+The hours network at one fixed calibration, queried pointwise with
 [`controls`](@ref) (CPU copy of the model, Float32 only at the input).
+Consumption is recovered from the intratemporal condition, so the policy
+carries the calibration and its implied `chi`.
 """
 struct NNLaborPolicy{M}
     model::M
+    p::RBCLaborParams
+    chi::Float64
     theta_norm::NTuple{7,Float64}
     k_low::Float64
     k_high::Float64
@@ -328,7 +339,8 @@ function NNLaborPolicy(solver::NNSolver{RBCLaborParams}, p::RBCLaborParams)
              normalize_scalar(p.gamma, base.gamma_bounds),
              normalize_scalar(p.sigma_eps, base.sigma_eps_bounds),
              normalize_scalar(p.nu, base.nu_bounds))
-    return NNLaborPolicy(cpu(solver.model), theta, k_low, k_high, A_low, A_high)
+    return NNLaborPolicy(cpu(solver.model), p, steady_state(p).chi,
+                         theta, k_low, k_high, A_low, A_high)
 end
 
 """
@@ -337,13 +349,21 @@ end
 Consumption share and hours at state `(k, A)`; the labor-model analogue of
 `consumption_share`. Implemented by [`NNLaborPolicy`](@ref) and
 [`LaborTIPolicy`](@ref), so one `simulate` drives both.
+
+For the NN policy, hours come from the network and consumption from the
+intratemporal condition; the returned share `c/res` is clamped below 1, which
+keeps `k' > 0` in simulation (the clamp can only bind far off equilibrium,
+where intratemporal-consistent consumption would exceed resources).
 """
 function controls(pol::NNLaborPolicy, k::Real, A::Real)
     kn = (k - pol.k_low) / (pol.k_high - pol.k_low)
     an = (A - pol.A_low) / (pol.A_high - pol.A_low)
     x = Float32[kn, an, pol.theta_norm...]
-    out = pol.model(reshape(x, 9, 1))
-    return Float64(out[1]), Float64(out[2])
+    p = pol.p
+    n = clamp(Float64(pol.model(reshape(x, 9, 1))[1]), 1e-2, 1.0)
+    c = ((1 - p.alpha) * A * k^p.alpha / (pol.chi * n^(p.alpha + 1 / p.nu)))^(1 / p.gamma)
+    res = A * k^p.alpha * n^(1 - p.alpha) + (1 - p.delta) * k
+    return clamp(c / res, 1e-6, 1.0 - 1e-6), n
 end
 
 "Simulate the trained labor-model network at calibration `p`."
