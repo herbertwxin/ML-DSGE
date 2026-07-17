@@ -10,38 +10,38 @@
       },
       "metrics": {
         "aggregate": {
-          "max_nrmse": 0.3629817951370032,
-          "mean_nrmse": 0.1967176535525217
+          "max_nrmse": 0.6446313950516184,
+          "mean_nrmse": 0.33825925232314913
         },
         "capital": {
-          "level_ratio": 1.0061403331184513,
-          "max_abs": 0.02630021389966819,
-          "nrmse_vs_ti_std": 0.3629817951370032,
-          "rmse": 0.01179908107940538
+          "level_ratio": 0.9842057753863445,
+          "max_abs": 0.034711122143173734,
+          "nrmse_vs_ti_std": 0.5390668940863563,
+          "rmse": 0.027877086327760602
         },
         "consumption": {
-          "level_ratio": 1.0014500233944097,
-          "max_abs": 0.00465971203903498,
-          "nrmse_vs_ti_std": 0.15570083025646234,
-          "rmse": 0.0013906599274259913
+          "level_ratio": 0.9963323514978255,
+          "max_abs": 0.002570231081482355,
+          "nrmse_vs_ti_std": 0.1397146668528394,
+          "rmse": 0.0017494364312144017
         },
         "hours": {
-          "level_ratio": 1.0008192561704452,
-          "max_abs": 0.0009475612201631511,
-          "nrmse_vs_ti_std": 0.22516527508496376,
-          "rmse": 0.00037628170197895626
+          "level_ratio": 0.9976166215899155,
+          "max_abs": 0.0019077202691200057,
+          "nrmse_vs_ti_std": 0.6446313950516184,
+          "rmse": 0.0008540937162243329
         },
         "investment": {
-          "level_ratio": 1.0064852985709358,
-          "max_abs": 0.00511929555594548,
-          "nrmse_vs_ti_std": 0.2815909951055798,
-          "rmse": 0.0018457880864800416
+          "level_ratio": 0.9835218456099571,
+          "max_abs": 0.004790794801072029,
+          "nrmse_vs_ti_std": 0.44290657155635815,
+          "rmse": 0.003782452225887477
         },
         "output": {
-          "level_ratio": 1.0029212879572582,
-          "max_abs": 0.004846883719077599,
-          "nrmse_vs_ti_std": 0.154867025731121,
-          "rmse": 0.002185612655268701
+          "level_ratio": 0.9920463696456573,
+          "max_abs": 0.0066815830517591435,
+          "nrmse_vs_ti_std": 0.26323598639172247,
+          "rmse": 0.0054210264537778614
         },
         "productivity": {
           "level_ratio": 1.0,
@@ -52,22 +52,22 @@
       },
       "params": {
         "A_sigma_mult": 3.0,
-        "alpha": 0.39711573261765143,
+        "alpha": 0.41322424050824375,
         "alpha_bounds": [
           0.2,
           0.45
         ],
-        "beta": 0.9605796577807395,
+        "beta": 0.9700589250358537,
         "beta_bounds": [
           0.9,
           0.99
         ],
-        "delta": 0.11434022971898956,
+        "delta": 0.12960688935213763,
         "delta_bounds": [
           0.02,
           0.15
         ],
-        "gamma": 0.5197849730628508,
+        "gamma": 1.1763796619427878,
         "gamma_bounds": [
           0.5,
           4.0
@@ -80,17 +80,17 @@
           1.5
         ],
         "n_ss_target": 0.3333333333333333,
-        "nu": 0.5998464932963563,
+        "nu": 1.9049105301510119,
         "nu_bounds": [
           0.5,
           2.0
         ],
-        "rho": 0.9139772600341165,
+        "rho": 0.9745995120148184,
         "rho_bounds": [
           0.85,
           0.99
         ],
-        "sigma_eps": 0.005353029328852661,
+        "sigma_eps": 0.00842508430533205,
         "sigma_eps_bounds": [
           0.005,
           0.05
@@ -98,27 +98,27 @@
       }
     },
     "model": "labor",
-    "paths_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_001_paths.csv",
-    "plot_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_001_plot.png",
+    "paths_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_001_paths.csv",
+    "plot_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_001_plot.png",
     "rank": 1,
     "summary": {
-      "alpha": 0.39711573261765143,
-      "beta": 0.9605796577807395,
-      "delta": 0.11434022971898956,
-      "gamma": 0.5197849730628508,
-      "mean_nrmse": 0.1967176535525217,
+      "alpha": 0.41322424050824375,
+      "beta": 0.9700589250358537,
+      "delta": 0.12960688935213763,
+      "gamma": 1.1763796619427878,
+      "mean_nrmse": 0.33825925232314913,
       "nn_a_oob_frac": 0.0,
       "nn_k_oob_frac": 0.0,
       "nrmse_A": 0.0,
-      "nrmse_c": 0.15570083025646234,
-      "nrmse_i": 0.2815909951055798,
-      "nrmse_k": 0.3629817951370032,
-      "nrmse_n": 0.22516527508496376,
-      "nrmse_y": 0.154867025731121,
-      "nu": 0.5998464932963563,
-      "rho": 0.9139772600341165,
-      "score_max_nrmse": 0.3629817951370032,
-      "sigma_eps": 0.005353029328852661,
+      "nrmse_c": 0.1397146668528394,
+      "nrmse_i": 0.44290657155635815,
+      "nrmse_k": 0.5390668940863563,
+      "nrmse_n": 0.6446313950516184,
+      "nrmse_y": 0.26323598639172247,
+      "nu": 1.9049105301510119,
+      "rho": 0.9745995120148184,
+      "score_max_nrmse": 0.6446313950516184,
+      "sigma_eps": 0.00842508430533205,
       "ti_a_oob_frac": 0.0,
       "ti_converged": true,
       "ti_k_oob_frac": 0.0
@@ -135,163 +135,38 @@
       },
       "metrics": {
         "aggregate": {
-          "max_nrmse": 0.2898056613551684,
-          "mean_nrmse": 0.1164480242998784
+          "max_nrmse": 0.28030030641583314,
+          "mean_nrmse": 0.11544453405136319
         },
         "capital": {
-          "level_ratio": 0.9904171580221223,
-          "max_abs": 0.016299004025282282,
-          "nrmse_vs_ti_std": 0.2898056613551684,
-          "rmse": 0.008921841408317118
+          "level_ratio": 1.0060973861118994,
+          "max_abs": 0.006525829229115043,
+          "nrmse_vs_ti_std": 0.28030030641583314,
+          "rmse": 0.0033476658271807745
         },
         "consumption": {
-          "level_ratio": 0.9994490205274177,
-          "max_abs": 0.0006051635564939262,
-          "nrmse_vs_ti_std": 0.028414533441754413,
-          "rmse": 0.00023073566663949947
+          "level_ratio": 1.000328653058855,
+          "max_abs": 0.00037390057260311416,
+          "nrmse_vs_ti_std": 0.055544562166378555,
+          "rmse": 0.0001602916708077459
         },
         "hours": {
-          "level_ratio": 0.9996487423334142,
-          "max_abs": 0.0014431285334861044,
-          "nrmse_vs_ti_std": 0.030690505659781847,
-          "rmse": 0.0003785417165439184
+          "level_ratio": 0.9999776875206651,
+          "max_abs": 0.0008309529312658936,
+          "nrmse_vs_ti_std": 0.0859900367080078,
+          "rmse": 0.00026225797526021276
         },
         "investment": {
-          "level_ratio": 0.9902294530942809,
-          "max_abs": 0.0020725641582095,
-          "nrmse_vs_ti_std": 0.2485392069844553,
-          "rmse": 0.0010648056028776257
+          "level_ratio": 1.0065422754030047,
+          "max_abs": 0.0012965524693674402,
+          "nrmse_vs_ti_std": 0.1723102656173511,
+          "rmse": 0.0005036819164829945
         },
         "output": {
-          "level_ratio": 0.9974499944899577,
-          "max_abs": 0.00226708334963327,
-          "nrmse_vs_ti_std": 0.10123823835811048,
-          "rmse": 0.001240385549752362
-        },
-        "productivity": {
-          "level_ratio": 1.0,
-          "max_abs": 0.0,
-          "nrmse_vs_ti_std": 0.0,
-          "rmse": 0.0
-        }
-      },
-      "params": {
-        "A_sigma_mult": 3.0,
-        "alpha": 0.23750119224754837,
-        "alpha_bounds": [
-          0.2,
-          0.45
-        ],
-        "beta": 0.9894132704211986,
-        "beta_bounds": [
-          0.9,
-          0.99
-        ],
-        "delta": 0.11112205672042057,
-        "delta_bounds": [
-          0.02,
-          0.15
-        ],
-        "gamma": 3.6449254147760892,
-        "gamma_bounds": [
-          0.5,
-          4.0
-        ],
-        "hard_beta_low_norm": 0.85,
-        "hard_delta_high_norm": 0.2,
-        "hard_region_prob": 0.5,
-        "k_bounds": [
-          0.5,
-          1.5
-        ],
-        "n_ss_target": 0.3333333333333333,
-        "nu": 1.458609961515388,
-        "nu_bounds": [
-          0.5,
-          2.0
-        ],
-        "rho": 0.9785815041143262,
-        "rho_bounds": [
-          0.85,
-          0.99
-        ],
-        "sigma_eps": 0.013142296680909608,
-        "sigma_eps_bounds": [
-          0.005,
-          0.05
-        ]
-      }
-    },
-    "model": "labor",
-    "paths_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_002_paths.csv",
-    "plot_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_002_plot.png",
-    "rank": 2,
-    "summary": {
-      "alpha": 0.23750119224754837,
-      "beta": 0.9894132704211986,
-      "delta": 0.11112205672042057,
-      "gamma": 3.6449254147760892,
-      "mean_nrmse": 0.1164480242998784,
-      "nn_a_oob_frac": 0.0,
-      "nn_k_oob_frac": 0.0,
-      "nrmse_A": 0.0,
-      "nrmse_c": 0.028414533441754413,
-      "nrmse_i": 0.2485392069844553,
-      "nrmse_k": 0.2898056613551684,
-      "nrmse_n": 0.030690505659781847,
-      "nrmse_y": 0.10123823835811048,
-      "nu": 1.458609961515388,
-      "rho": 0.9785815041143262,
-      "score_max_nrmse": 0.2898056613551684,
-      "sigma_eps": 0.013142296680909608,
-      "ti_a_oob_frac": 0.0,
-      "ti_converged": true,
-      "ti_k_oob_frac": 0.0
-    }
-  },
-  {
-    "detail": {
-      "diagnostics": {
-        "nn_a_oob_frac": 0.0,
-        "nn_k_oob_frac": 0.0,
-        "ti_a_oob_frac": 0.0,
-        "ti_converged": true,
-        "ti_k_oob_frac": 0.0
-      },
-      "metrics": {
-        "aggregate": {
-          "max_nrmse": 0.27126065613889666,
-          "mean_nrmse": 0.09687877547601549
-        },
-        "capital": {
-          "level_ratio": 1.006544335243299,
-          "max_abs": 0.0038587228335838497,
-          "nrmse_vs_ti_std": 0.27126065613889666,
-          "rmse": 0.0032397040175462482
-        },
-        "consumption": {
-          "level_ratio": 1.0003650163367053,
-          "max_abs": 0.00025728731954327566,
-          "nrmse_vs_ti_std": 0.043731610461043506,
-          "rmse": 0.0001262016052429565
-        },
-        "hours": {
-          "level_ratio": 0.9999587919067102,
-          "max_abs": 0.0005448087064677809,
-          "nrmse_vs_ti_std": 0.039734724806865546,
-          "rmse": 0.00012118553351425513
-        },
-        "investment": {
-          "level_ratio": 1.0068766431623488,
-          "max_abs": 0.0006875324802737004,
-          "nrmse_vs_ti_std": 0.13683211665980435,
-          "rmse": 0.00039997537296289175
-        },
-        "output": {
-          "level_ratio": 1.0013500638685011,
-          "max_abs": 0.0006625890230723686,
-          "nrmse_vs_ti_std": 0.0897135447894829,
-          "rmse": 0.0004982100832239933
+          "level_ratio": 1.0012686199085326,
+          "max_abs": 0.0011908150407678453,
+          "nrmse_vs_ti_std": 0.09852203340060861,
+          "rmse": 0.0005471266415243514
         },
         "productivity": {
           "level_ratio": 1.0,
@@ -348,26 +223,26 @@
       }
     },
     "model": "labor",
-    "paths_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_003_paths.csv",
-    "plot_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_003_plot.png",
-    "rank": 3,
+    "paths_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_002_paths.csv",
+    "plot_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_002_plot.png",
+    "rank": 2,
     "summary": {
       "alpha": 0.21175583786115806,
       "beta": 0.9574882054236733,
       "delta": 0.11195900445078191,
       "gamma": 3.9756672319642132,
-      "mean_nrmse": 0.09687877547601549,
+      "mean_nrmse": 0.11544453405136319,
       "nn_a_oob_frac": 0.0,
       "nn_k_oob_frac": 0.0,
       "nrmse_A": 0.0,
-      "nrmse_c": 0.043731610461043506,
-      "nrmse_i": 0.13683211665980435,
-      "nrmse_k": 0.27126065613889666,
-      "nrmse_n": 0.039734724806865546,
-      "nrmse_y": 0.0897135447894829,
+      "nrmse_c": 0.055544562166378555,
+      "nrmse_i": 0.1723102656173511,
+      "nrmse_k": 0.28030030641583314,
+      "nrmse_n": 0.0859900367080078,
+      "nrmse_y": 0.09852203340060861,
       "nu": 0.6456614922072144,
       "rho": 0.8716497816385556,
-      "score_max_nrmse": 0.27126065613889666,
+      "score_max_nrmse": 0.28030030641583314,
       "sigma_eps": 0.010272021165116656,
       "ti_a_oob_frac": 0.0,
       "ti_converged": true,
@@ -385,38 +260,38 @@
       },
       "metrics": {
         "aggregate": {
-          "max_nrmse": 0.2174654855228397,
-          "mean_nrmse": 0.0905450950345073
+          "max_nrmse": 0.2665058567938935,
+          "mean_nrmse": 0.16524441501643358
         },
         "capital": {
-          "level_ratio": 0.9757621901095955,
-          "max_abs": 0.05574539591293859,
-          "nrmse_vs_ti_std": 0.2174654855228397,
-          "rmse": 0.049617935372902336
+          "level_ratio": 1.0026804955336113,
+          "max_abs": 0.025773249905734152,
+          "nrmse_vs_ti_std": 0.26433589987159467,
+          "rmse": 0.008592499008401587
         },
         "consumption": {
-          "level_ratio": 0.9928895367877951,
-          "max_abs": 0.006017603347480471,
-          "nrmse_vs_ti_std": 0.07326730490098289,
-          "rmse": 0.004616142220327296
+          "level_ratio": 1.0007240045928731,
+          "max_abs": 0.004642225357824714,
+          "nrmse_vs_ti_std": 0.1606955741845116,
+          "rmse": 0.001435271059024014
         },
         "hours": {
-          "level_ratio": 1.0021820986089196,
-          "max_abs": 0.0019356886776027982,
-          "nrmse_vs_ti_std": 0.06386859409101193,
-          "rmse": 0.0009125512064511008
+          "level_ratio": 1.0003231827330734,
+          "max_abs": 0.0009315493596392388,
+          "nrmse_vs_ti_std": 0.18724370100398424,
+          "rmse": 0.0003129096103830043
         },
         "investment": {
-          "level_ratio": 0.9713268826052267,
-          "max_abs": 0.005464681592880161,
-          "nrmse_vs_ti_std": 0.1063775701633815,
-          "rmse": 0.0018791459207265601
+          "level_ratio": 1.002559315666717,
+          "max_abs": 0.005222085580721514,
+          "nrmse_vs_ti_std": 0.2665058567938935,
+          "rmse": 0.0017469071951781929
         },
         "output": {
-          "level_ratio": 0.9909976935027779,
-          "max_abs": 0.00699479677419601,
-          "nrmse_vs_ti_std": 0.08229161552882779,
-          "rmse": 0.006194076317232708
+          "level_ratio": 1.0012602668725388,
+          "max_abs": 0.004752417484843341,
+          "nrmse_vs_ti_std": 0.11268545824461754,
+          "rmse": 0.0015903111875589975
         },
         "productivity": {
           "level_ratio": 1.0,
@@ -427,22 +302,22 @@
       },
       "params": {
         "A_sigma_mult": 3.0,
-        "alpha": 0.4175234961395434,
+        "alpha": 0.39711573261765143,
         "alpha_bounds": [
           0.2,
           0.45
         ],
-        "beta": 0.9002374462189954,
+        "beta": 0.9605796577807395,
         "beta_bounds": [
           0.9,
           0.99
         ],
-        "delta": 0.02978104422174039,
+        "delta": 0.11434022971898956,
         "delta_bounds": [
           0.02,
           0.15
         ],
-        "gamma": 1.8690442493893382,
+        "gamma": 0.5197849730628508,
         "gamma_bounds": [
           0.5,
           4.0
@@ -455,17 +330,17 @@
           1.5
         ],
         "n_ss_target": 0.3333333333333333,
-        "nu": 0.9659056409072896,
+        "nu": 0.5998464932963563,
         "nu_bounds": [
           0.5,
           2.0
         ],
-        "rho": 0.974028003876987,
+        "rho": 0.9139772600341165,
         "rho_bounds": [
           0.85,
           0.99
         ],
-        "sigma_eps": 0.029846133157331176,
+        "sigma_eps": 0.005353029328852661,
         "sigma_eps_bounds": [
           0.005,
           0.05
@@ -473,27 +348,27 @@
       }
     },
     "model": "labor",
-    "paths_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_004_paths.csv",
-    "plot_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_004_plot.png",
-    "rank": 4,
+    "paths_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_003_paths.csv",
+    "plot_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_003_plot.png",
+    "rank": 3,
     "summary": {
-      "alpha": 0.4175234961395434,
-      "beta": 0.9002374462189954,
-      "delta": 0.02978104422174039,
-      "gamma": 1.8690442493893382,
-      "mean_nrmse": 0.0905450950345073,
+      "alpha": 0.39711573261765143,
+      "beta": 0.9605796577807395,
+      "delta": 0.11434022971898956,
+      "gamma": 0.5197849730628508,
+      "mean_nrmse": 0.16524441501643358,
       "nn_a_oob_frac": 0.0,
       "nn_k_oob_frac": 0.0,
       "nrmse_A": 0.0,
-      "nrmse_c": 0.07326730490098289,
-      "nrmse_i": 0.1063775701633815,
-      "nrmse_k": 0.2174654855228397,
-      "nrmse_n": 0.06386859409101193,
-      "nrmse_y": 0.08229161552882779,
-      "nu": 0.9659056409072896,
-      "rho": 0.974028003876987,
-      "score_max_nrmse": 0.2174654855228397,
-      "sigma_eps": 0.029846133157331176,
+      "nrmse_c": 0.1606955741845116,
+      "nrmse_i": 0.2665058567938935,
+      "nrmse_k": 0.26433589987159467,
+      "nrmse_n": 0.18724370100398424,
+      "nrmse_y": 0.11268545824461754,
+      "nu": 0.5998464932963563,
+      "rho": 0.9139772600341165,
+      "score_max_nrmse": 0.2665058567938935,
+      "sigma_eps": 0.005353029328852661,
       "ti_a_oob_frac": 0.0,
       "ti_converged": true,
       "ti_k_oob_frac": 0.0
@@ -510,38 +385,38 @@
       },
       "metrics": {
         "aggregate": {
-          "max_nrmse": 0.20749749127345116,
-          "mean_nrmse": 0.102513462752288
+          "max_nrmse": 0.254570926234943,
+          "mean_nrmse": 0.12083158504625237
         },
         "capital": {
-          "level_ratio": 0.9741402892356329,
-          "max_abs": 0.0711038845922336,
-          "nrmse_vs_ti_std": 0.20749749127345116,
-          "rmse": 0.05159207122437553
+          "level_ratio": 1.003125480470753,
+          "max_abs": 0.003591635998978049,
+          "nrmse_vs_ti_std": 0.254570926234943,
+          "rmse": 0.0020516582712876235
         },
         "consumption": {
-          "level_ratio": 0.9900854971372024,
-          "max_abs": 0.014359216080877757,
-          "nrmse_vs_ti_std": 0.09096635416533473,
-          "rmse": 0.006404848578462014
+          "level_ratio": 1.0005462186716394,
+          "max_abs": 0.000529426144698697,
+          "nrmse_vs_ti_std": 0.07565329038230487,
+          "rmse": 0.00022371231362322024
         },
         "hours": {
-          "level_ratio": 0.9967118358776356,
-          "max_abs": 0.002303727724789373,
-          "nrmse_vs_ti_std": 0.10181628877026556,
-          "rmse": 0.001315413508037789
+          "level_ratio": 1.0000006249799607,
+          "max_abs": 0.00043082801647698066,
+          "nrmse_vs_ti_std": 0.12306545905555208,
+          "rmse": 0.00015896343565546806
         },
         "investment": {
-          "level_ratio": 0.9661617219304212,
-          "max_abs": 0.01243478484458227,
-          "nrmse_vs_ti_std": 0.12616451101282733,
-          "rmse": 0.0035011528217787783
+          "level_ratio": 1.0031837464047646,
+          "max_abs": 0.0008310050772248889,
+          "nrmse_vs_ti_std": 0.16904530718844296,
+          "rmse": 0.000360415783405694
         },
         "output": {
-          "level_ratio": 0.9882056109081702,
-          "max_abs": 0.010504295444529133,
-          "nrmse_vs_ti_std": 0.08863613129184912,
-          "rmse": 0.007414600436830084
+          "level_ratio": 1.001103500921663,
+          "max_abs": 0.0008962574927101619,
+          "nrmse_vs_ti_std": 0.10265452741627124,
+          "rmse": 0.0005000412195665269
         },
         "productivity": {
           "level_ratio": 1.0,
@@ -552,22 +427,22 @@
       },
       "params": {
         "A_sigma_mult": 3.0,
-        "alpha": 0.37424623116909433,
+        "alpha": 0.35329837624682525,
         "alpha_bounds": [
           0.2,
           0.45
         ],
-        "beta": 0.9153573363362154,
+        "beta": 0.9118844941771376,
         "beta_bounds": [
           0.9,
           0.99
         ],
-        "delta": 0.02552035916554677,
+        "delta": 0.14394078841255867,
         "delta_bounds": [
           0.02,
           0.15
         ],
-        "gamma": 0.6131207814047792,
+        "gamma": 2.0259799716496962,
         "gamma_bounds": [
           0.5,
           4.0
@@ -580,17 +455,17 @@
           1.5
         ],
         "n_ss_target": 0.3333333333333333,
-        "nu": 1.2323830369379851,
+        "nu": 1.0499378574977687,
         "nu_bounds": [
           0.5,
           2.0
         ],
-        "rho": 0.9603878855585168,
+        "rho": 0.8640870241340709,
         "rho_bounds": [
           0.85,
           0.99
         ],
-        "sigma_eps": 0.033189782001138195,
+        "sigma_eps": 0.007351879839068446,
         "sigma_eps_bounds": [
           0.005,
           0.05
@@ -598,27 +473,152 @@
       }
     },
     "model": "labor",
-    "paths_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_005_paths.csv",
-    "plot_file": "/workspace/ML-DSGE/rbc/simulation_labor/divergence_case_005_plot.png",
-    "rank": 5,
+    "paths_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_004_paths.csv",
+    "plot_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_004_plot.png",
+    "rank": 4,
     "summary": {
-      "alpha": 0.37424623116909433,
-      "beta": 0.9153573363362154,
-      "delta": 0.02552035916554677,
-      "gamma": 0.6131207814047792,
-      "mean_nrmse": 0.102513462752288,
+      "alpha": 0.35329837624682525,
+      "beta": 0.9118844941771376,
+      "delta": 0.14394078841255867,
+      "gamma": 2.0259799716496962,
+      "mean_nrmse": 0.12083158504625237,
       "nn_a_oob_frac": 0.0,
       "nn_k_oob_frac": 0.0,
       "nrmse_A": 0.0,
-      "nrmse_c": 0.09096635416533473,
-      "nrmse_i": 0.12616451101282733,
-      "nrmse_k": 0.20749749127345116,
-      "nrmse_n": 0.10181628877026556,
-      "nrmse_y": 0.08863613129184912,
-      "nu": 1.2323830369379851,
-      "rho": 0.9603878855585168,
-      "score_max_nrmse": 0.20749749127345116,
-      "sigma_eps": 0.033189782001138195,
+      "nrmse_c": 0.07565329038230487,
+      "nrmse_i": 0.16904530718844296,
+      "nrmse_k": 0.254570926234943,
+      "nrmse_n": 0.12306545905555208,
+      "nrmse_y": 0.10265452741627124,
+      "nu": 1.0499378574977687,
+      "rho": 0.8640870241340709,
+      "score_max_nrmse": 0.254570926234943,
+      "sigma_eps": 0.007351879839068446,
+      "ti_a_oob_frac": 0.0,
+      "ti_converged": true,
+      "ti_k_oob_frac": 0.0
+    }
+  },
+  {
+    "detail": {
+      "diagnostics": {
+        "nn_a_oob_frac": 0.0,
+        "nn_k_oob_frac": 0.0,
+        "ti_a_oob_frac": 0.0,
+        "ti_converged": true,
+        "ti_k_oob_frac": 0.0
+      },
+      "metrics": {
+        "aggregate": {
+          "max_nrmse": 0.1934111524432934,
+          "mean_nrmse": 0.09316136132352348
+        },
+        "capital": {
+          "level_ratio": 1.0027766470721526,
+          "max_abs": 0.02310990815628644,
+          "nrmse_vs_ti_std": 0.1934111524432934,
+          "rmse": 0.011304076407564465
+        },
+        "consumption": {
+          "level_ratio": 1.0005893931193897,
+          "max_abs": 0.00141319459599909,
+          "nrmse_vs_ti_std": 0.05983346369634143,
+          "rmse": 0.0005705397733404893
+        },
+        "hours": {
+          "level_ratio": 0.9998634199379529,
+          "max_abs": 0.0007478174114941005,
+          "nrmse_vs_ti_std": 0.09499155746297606,
+          "rmse": 0.00026875757647884307
+        },
+        "investment": {
+          "level_ratio": 1.002817212918907,
+          "max_abs": 0.002965633956884206,
+          "nrmse_vs_ti_std": 0.13403985921184244,
+          "rmse": 0.0009632106754450837
+        },
+        "output": {
+          "level_ratio": 1.0011228919756607,
+          "max_abs": 0.0030052598546261855,
+          "nrmse_vs_ti_std": 0.07669213512668757,
+          "rmse": 0.0012386892632813655
+        },
+        "productivity": {
+          "level_ratio": 1.0,
+          "max_abs": 0.0,
+          "nrmse_vs_ti_std": 0.0,
+          "rmse": 0.0
+        }
+      },
+      "params": {
+        "A_sigma_mult": 3.0,
+        "alpha": 0.4333383218192913,
+        "alpha_bounds": [
+          0.2,
+          0.45
+        ],
+        "beta": 0.9522503983687087,
+        "beta_bounds": [
+          0.9,
+          0.99
+        ],
+        "delta": 0.06254092430331687,
+        "delta_bounds": [
+          0.02,
+          0.15
+        ],
+        "gamma": 2.3444857157894528,
+        "gamma_bounds": [
+          0.5,
+          4.0
+        ],
+        "hard_beta_low_norm": 0.85,
+        "hard_delta_high_norm": 0.2,
+        "hard_region_prob": 0.5,
+        "k_bounds": [
+          0.5,
+          1.5
+        ],
+        "n_ss_target": 0.3333333333333333,
+        "nu": 1.1978022580718335,
+        "nu_bounds": [
+          0.5,
+          2.0
+        ],
+        "rho": 0.9670720005073011,
+        "rho_bounds": [
+          0.85,
+          0.99
+        ],
+        "sigma_eps": 0.006840776121246166,
+        "sigma_eps_bounds": [
+          0.005,
+          0.05
+        ]
+      }
+    },
+    "model": "labor",
+    "paths_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_005_paths.csv",
+    "plot_file": "/Users/herbertxin/Documents/Github/ML-DSGE/rbc/simulation_labor/divergence_case_005_plot.png",
+    "rank": 5,
+    "summary": {
+      "alpha": 0.4333383218192913,
+      "beta": 0.9522503983687087,
+      "delta": 0.06254092430331687,
+      "gamma": 2.3444857157894528,
+      "mean_nrmse": 0.09316136132352348,
+      "nn_a_oob_frac": 0.0,
+      "nn_k_oob_frac": 0.0,
+      "nrmse_A": 0.0,
+      "nrmse_c": 0.05983346369634143,
+      "nrmse_i": 0.13403985921184244,
+      "nrmse_k": 0.1934111524432934,
+      "nrmse_n": 0.09499155746297606,
+      "nrmse_y": 0.07669213512668757,
+      "nu": 1.1978022580718335,
+      "rho": 0.9670720005073011,
+      "score_max_nrmse": 0.1934111524432934,
+      "sigma_eps": 0.006840776121246166,
       "ti_a_oob_frac": 0.0,
       "ti_converged": true,
       "ti_k_oob_frac": 0.0

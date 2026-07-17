@@ -9,3 +9,7 @@ simulation/*.png
 simulation/*.json
 !simulation/.gitkeep
 literate/
+simulation_labor/*.csv
+simulation_labor/*.png
+simulation_labor/*.json
+!simulation_labor/.gitkeep
